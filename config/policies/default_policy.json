@@ -1,0 +1,247 @@
+{
+  "patterns": [
+    {
+      "name": "email",
+      "category": "PII",
+      "regex_pattern": null,
+      "keywords": null,
+      "presidio_entities": [
+        "EMAIL_ADDRESS"
+      ],
+      "description": "Email addresses"
+    },
+    {
+      "name": "phone",
+      "category": "PII",
+      "regex_pattern": null,
+      "keywords": null,
+      "presidio_entities": [
+        "PHONE_NUMBER"
+      ],
+      "description": "Phone numbers"
+    },
+    {
+      "name": "person_name",
+      "category": "PII",
+      "regex_pattern": null,
+      "keywords": null,
+      "presidio_entities": [
+        "PERSON"
+      ],
+      "description": "Person names"
+    },
+    {
+      "name": "credit_card",
+      "category": "PII",
+      "regex_pattern": null,
+      "keywords": null,
+      "presidio_entities": [
+        "CREDIT_CARD"
+      ],
+      "description": "Credit card numbers"
+    },
+    {
+      "name": "ssn",
+      "category": "PII",
+      "regex_pattern": null,
+      "keywords": null,
+      "presidio_entities": [
+        "US_SSN"
+      ],
+      "description": "Social Security Numbers"
+    },
+    {
+      "name": "address",
+      "category": "PII",
+      "regex_pattern": null,
+      "keywords": null,
+      "presidio_entities": [
+        "LOCATION"
+      ],
+      "description": "Physical addresses"
+    },
+    {
+      "name": "hostname",
+      "category": "OPERATIONAL_IDENTIFIERS",
+      "regex_pattern": "\\b[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\\b",
+      "keywords": [
+        "host",
+        "server",
+        "node",
+        "db-server",
+        "web-server"
+      ],
+      "presidio_entities": null,
+      "description": "Server hostnames"
+    },
+    {
+      "name": "ip_address",
+      "category": "OPERATIONAL_IDENTIFIERS",
+      "regex_pattern": null,
+      "keywords": null,
+      "presidio_entities": [
+        "IP_ADDRESS"
+      ],
+      "description": "IP addresses"
+    },
+    {
+      "name": "api_key",
+      "category": "SECRETS",
+      "regex_pattern": "\\b[A-Za-z0-9]{20,}\\b",
+      "keywords": [
+        "api_key",
+        "API-KEY",
+        "Secret",
+        "token"
+      ],
+      "presidio_entities": null,
+      "description": "API keys and secrets"
+    },
+    {
+      "name": "database_url",
+      "category": "SECRETS",
+      "regex_pattern": "((?:[a-zA-Z0-9]+://)?(?:[a-zA-Z0-9]+[.-])+[a-zA-Z0-9]+(?:/[a-zA-Z0-9_./-]*)?)",
+      "keywords": [
+        "postgres://",
+        "mysql://",
+        "mongodb://",
+        "redis://"
+      ],
+      "presidio_entities": null,
+      "description": "Database connection URLs"
+    },
+    {
+      "name": "company_name",
+      "category": "CUSTOMER_ORG_INFO",
+      "regex_pattern": null,
+      "keywords": [
+        "Inc.",
+        "Corp.",
+        "LLC",
+        "Ltd.",
+        "Company"
+      ],
+      "presidio_entities": null,
+      "description": "Company names"
+    },
+    {
+      "name": "customer_id",
+      "category": "CUSTOMER_ORG_INFO",
+      "regex_pattern": "\\bcust_\\d+\\b|\\bcustomer_\\d+\\b",
+      "keywords": null,
+      "presidio_entities": null,
+      "description": "Customer identifiers"
+    },
+    {
+      "name": "internal_path",
+      "category": "MISCELLANEOUS",
+      "regex_pattern": "/[a-zA-Z0-9_./-]+",
+      "keywords": [
+        "/internal/",
+        "/private/",
+        "/admin/"
+      ],
+      "presidio_entities": null,
+      "description": "Internal file/system paths"
+    }
+  ],
+  "policies": [
+    {
+      "category": "SECRETS",
+      "sensitivity_level": "CRITICAL",
+      "action": "REDACT",
+      "patterns": [
+        "api_key",
+        "database_url"
+      ],
+      "conditions": null,
+      "exceptions": null
+    },
+    {
+      "category": "PII",
+      "sensitivity_level": "CRITICAL",
+      "action": "REDACT",
+      "patterns": [
+        "ssn",
+        "credit_card"
+      ],
+      "conditions": null,
+      "exceptions": null
+    },
+    {
+      "category": "PII",
+      "sensitivity_level": "HIGH",
+      "action": "REDACT",
+      "patterns": [
+        "email"
+      ],
+      "conditions": null,
+      "exceptions": [
+        "support@company.com",
+        "admin@company.com"
+      ]
+    },
+    {
+      "category": "PII",
+      "sensitivity_level": "HIGH",
+      "action": "PSEUDONYMIZE",
+      "patterns": [
+        "phone"
+      ],
+      "conditions": null,
+      "exceptions": null
+    },
+    {
+      "category": "PII",
+      "sensitivity_level": "MEDIUM",
+      "action": "PSEUDONYMIZE",
+      "patterns": [
+        "person_name"
+      ],
+      "conditions": null,
+      "exceptions": null
+    },
+    {
+      "category": "OPERATIONAL_IDENTIFIERS",
+      "sensitivity_level": "MEDIUM",
+      "action": "PSEUDONYMIZE",
+      "patterns": [
+        "hostname",
+        "ip_address"
+      ],
+      "conditions": null,
+      "exceptions": null
+    },
+    {
+      "category": "CUSTOMER_ORG_INFO",
+      "sensitivity_level": "LOW",
+      "action": "PSEUDONYMIZE",
+      "patterns": [
+        "company_name",
+        "customer_id"
+      ],
+      "conditions": null,
+      "exceptions": null
+    },
+    {
+      "category": "PII",
+      "sensitivity_level": "LOW",
+      "action": "RETAIN",
+      "patterns": [
+        "address"
+      ],
+      "conditions": null,
+      "exceptions": null
+    },
+    {
+      "category": "MISCELLANEOUS",
+      "sensitivity_level": "MINIMUM",
+      "action": "RETAIN",
+      "patterns": [
+        "internal_path"
+      ],
+      "conditions": null,
+      "exceptions": null
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "finder_model": {
+    "provider": "openai",
+    "model_name": "gpt-4o",
+    "api_key_env_var": "OPENAI_API_KEY",
+    "max_tokens": 2000,
+    "temperature": 0.1,
+    "timeout": 30
+  },
+  "judge_model": {
+    "provider": "anthropic",
+    "model_name": "claude-3-5-sonnet-20241022", 
+    "api_key_env_var": "ANTHROPIC_API_KEY",
+    "max_tokens": 1500,
+    "temperature": 0.05,
+    "timeout": 30
+  },
+  "fallback_model": {
+    "provider": "openai",
+    "model_name": "gpt-4o-mini",
+    "api_key_env_var": "OPENAI_API_KEY",
+    "max_tokens": 256,
+    "temperature": 0.2,
+    "timeout": 30
+  },
+  "enable_real_api": false,
+  "api_timeout": 30,
+  "retry_attempts": 3
+}

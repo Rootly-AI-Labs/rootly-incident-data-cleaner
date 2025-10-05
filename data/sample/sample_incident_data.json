@@ -1,0 +1,118 @@
+{
+  "platform": "sample",
+  "incident_id": "INC-12345",
+  "title": "Database Connection Pool Exhausted",
+  "description": "The primary database connection pool ran out of connections during peak traffic hours. During resolution discovered that John Smith (john.smith@company.com) made recent changes to the connection timeout settings.",
+  "status": "resolved",
+  "severity": "high",
+  "created_at": "2024-12-15T10:30:00Z",
+  "updated_at": "2024-12-15T14:45:00Z",
+  "resolved_at": "2024-12-15T14:45:00Z",
+  "assignee": {
+    "name": "Sarah Johnson",
+    "email": "sarah.johnson@company.com",
+    "phone": "+1-555-0123"
+  },
+  "team": {
+    "name": "Platform Engineering",
+    "slack_channel": "#platform-incidents"
+  },
+  "timeline_events": [
+    {
+      "timestamp": "2024-12-15T10:30:00Z",
+      "event": "Incident created",
+      "author": "Monitoring System",
+      "description": "Database connection count exceeded threshold"
+    },
+    {
+      "timestamp": "2024-12-15T10:35:00Z", 
+      "event": "Assignment",
+      "author": "Team Lead",
+      "description": "Assigned to Sarah Johnson at sarah.johnson@company.com"
+    },
+    {
+      "timestamp": "2024-12-15T11:15:00Z",
+      "event": "Investigation",
+      "author": "Sarah Johnson",
+      "description": "Found recent config changes by John Smith (john.smith@company.com). Checking if this caused connection leaks."
+    },
+    {
+      "timestamp": "2024-12-15T12:30:00Z",
+      "event": "Update",
+      "author": "Sarah Johnson", 
+      "description": "Discovered root cause: John's changes increased max connections but didn't account for our Kubernetes pod scaling. Will coordinate with DevOps team."
+    },
+    {
+      "timestamp": "2024-12-15T14:00:00Z",
+      "event": "Resolution",
+      "author": "Sarah Johnson",
+      "description": "Applied hotfix with proper connection pooling settings. Monitoring shows recovery."
+    },
+    {
+      "timestamp": "2024-12-15T14:45:00Z",
+      "event": "Incident resolved",
+      "author": "Sarah Johnson",
+      "description": "All metrics back to normal. Post-incident review scheduled for tomorrow."
+    }
+  ],
+  "custom_fields": {
+    "affected_services": ["user-api", "payment-service", "analytics-db"],
+    "customer_impact": "Payment processing delays for ~45 minutes",
+    "root_cause": "Configuration change by John Smith didn't account for Kubernetes auto-scaling",
+    "follow_up_required": true
+  },
+  "tags": ["database", "kubernetes", "configuration", "production"],
+  "contacts": [
+    {
+      "name": "Mike Chen",
+      "email": "mike.chen@company.com",
+      "role": "DBA",
+      "phone": "+1-555-0456"
+    },
+    {
+      "name": "Emily Rodriguez", 
+      "email": "emily.rodriguez@company.com",
+      "role": "DevOps Engineer",
+      "phone": "+1-555-0789"
+    }
+  ],
+  "analysis": {
+    "root_cause": "Recent database configuration changes by John Smith (john.smith@company.com) increased max connections from 50 to 200, but didn't account for Kubernetes horizontal pod scaling which could create up to 10 pods × 200 connections = 2000 total connections, exceeding database capacity.",
+    "contributing_factors": [
+      "Lack of coordination between DevOps and Platform teams",
+      "Missing capacity planning in configuration review process", 
+      "Insufficient monitoring of connection pool metrics"
+    ],
+    "lessons_learned": [
+      "Need better cross-team communication for infrastructure changes",
+      "Should implement capacity impact analysis for config changes",
+      "Add connection pool monitoring to dashboards"
+    ],
+    "action_items": [
+      {
+        "title": "Update configuration review process",
+        "assignee": "Emily Rodriguez (emily.rodriguez@company.com)",
+        "due_date": "2024-12-22T00:00:00Z",
+        "status": "pending"
+      },
+      {
+        "title": "Add connection pool monitoring",
+        "assignee": "Sarah Johnson", 
+        "due_date": "2024-12-20T00:00:00Z",
+        "status": "in_progress"
+      }
+    ]
+  },
+  "metrics": {
+    "mttr_minutes": 255,
+    "affected_customers": 1250,
+    "cost_per_minute": 15.50
+  },
+  "metadata": {
+    "source": "sample_generation",
+    "created_for": "pii_redaction_testing",
+    "contains_pii": true,
+    "pii_types_found": ["email", "phone", "name"],
+    "schema_version": "1.0"
+  }
+}
