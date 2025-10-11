@@ -45,6 +45,14 @@ test:
 test-verbose:
 	python tests/test_pipeline.py --verbose
 
+test-comprehensive:
+	python tests/test_comprehensive_pipeline.py
+
+test-performance:
+	python tests/test_performance.py
+
+test-all: test test-comprehensive test-performance
+
 # Code quality
 lint:
 	flake8 src/ main.py examples/ tests/
@@ -67,8 +75,11 @@ docs:
 run-example:
 	python examples/basic_usage.py
 
-run-cli-example:
-	python process_incidents.py data/test_samples/pagerduty_samples.jsonl --llm-simulation
+run-parallel-example:
+	python process_incidents.py data/test_samples/pagerduty_samples.jsonl --llm-simulation --max-concurrent 3
+
+run-sequential-example:
+	python process_incidents.py data/test_samples/pagerduty_samples.jsonl --llm-simulation --disable-parallel
 
 # Cleanup
 clean:
