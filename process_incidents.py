@@ -8,6 +8,7 @@ import json
 import asyncio
 import sys
 import argparse
+import time
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Any, Union, Optional
@@ -18,6 +19,7 @@ sys.path.append(str(Path(__file__).parent.parent / "src"))
 sys.path.append(str(Path(__file__).parent.parent))
 
 from main import PIIRedactionPipeline
+from src.parallel_processing_pipeline import ParallelPIIProcessingPipeline, ProcessingConfig
 
 def load_incident_data(file_path: str) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
     """Load incident data from JSON or JSONL file"""
@@ -191,7 +193,8 @@ def print_processing_summary(results: Dict[str, Any], incident_id: str):
     print(f"\nPROCESSED:")
     print(f"  {results['processed_text'][:500]}...")
 
-async def process_incidents(file_path: str, output_dir: Optional[str] = None, llm_simulation: bool = False, policy_path: Optional[str] = None):
+async def process_incidents(file_path: str, output_dir: Optional[str] = None, llm_simulation: bool = False, 
+                           policy_path: Optional[str] = None, max_concurrent: int = 5, enable_parallel: bool = True):
     """Process incidents from any platform using automatic incident ID detection"""
     
     # Load incidents
@@ -212,42 +215,105 @@ async def process_incidents(file_path: str, output_dir: Optional[str] = None, ll
     print("🚀 Initializing PII Redaction Pipeline...")
     if llm_simulation:
         print("💡 LLM simulation mode enabled - no API calls will be made")
-    pipeline = PIIRedactionPipeline(policy_path=policy_path, use_real_api=not llm_simulation)
     
-    # Process each incident
-    all_results = []
-    
-    for i, incident in enumerate(incidents, 1):
-        # Extract incident ID automatically
-        incident_id = extract_incident_id(incident)
-        print(f"\n🔄 Processing Incident {i}/{len(incidents)}: {incident_id}")
+    if enable_parallel:
+        print(f"⚡ Parallel processing enabled with max {max_concurrent} concurrent incidents")
+        # Configure parallel processing
+        config = ProcessingConfig(
+            max_concurrent_incidents=max_concurrent,
+            max_concurrent_llm_calls=10,
+            enable_deterministic_parallel=True,
+            enable_validation_parallel=True
+        )
+        pipeline = ParallelPIIProcessingPipeline(
+            policy_path=policy_path, 
+            use_real_api=not llm_simulation,
+            config=config
+        )
         
-        # Extract text for processing
-        text_to_process = extract_text_from_incident(incident)
+        # Process incidents in parallel
+        print(f"🔄 Processing {len(incidents)} incidents in parallel...")
+        start_time = time.time()
         
-        # Process through pipeline
-        try:
-            # Create incident-specific directory within the main output directory
-            incident_output_dir = output_dir / f"incident_{incident_id}"
-            results = await pipeline.process_text(text_to_process, str(incident_output_dir))
+        results = await pipeline.process_multiple_incidents(incidents, str(output_dir))
+        
+        end_time = time.time()
+        processing_time = end_time - start_time
+        
+        print(f"⚡ Parallel processing completed in {processing_time:.2f} seconds")
+        print(f"📊 Average time per incident: {processing_time/len(incidents):.2f} seconds")
+        
+        # Generate reports for each result
+        all_results = []
+        for i, result in enumerate(results):
+            incident_id = f"incident_{i+1}"  # Simplified ID for parallel processing
+            report_file = generate_detailed_report({
+                'original_text': result.original_text,
+                'processed_text': result.processed_text,
+                'quality_metrics': result.quality_metrics,
+                'validation_issues': result.validation_issues,
+                'critical_issues': result.critical_issues,
+                'high_issues': result.high_issues,
+                'recommendations': result.recommendations,
+                'pseudonym_map': result.pseudonym_map,
+                'processing_stats': result.processing_stats
+            }, incident_id, output_dir)
             
-            # Generate detailed report
-            report_file = generate_detailed_report(results, incident_id, output_dir)
-            
-            # Print summary
-            print_processing_summary(results, incident_id)
-            
-            # Store results
             all_results.append({
                 'incident_id': incident_id,
-                'incident_index': i,
-                'results': results,
+                'incident_index': i + 1,
+                'results': {
+                    'original_text': result.original_text,
+                    'processed_text': result.processed_text,
+                    'quality_metrics': result.quality_metrics,
+                    'validation_issues': result.validation_issues,
+                    'critical_issues': result.critical_issues,
+                    'high_issues': result.high_issues,
+                    'recommendations': result.recommendations,
+                    'pseudonym_map': result.pseudonym_map,
+                    'processing_stats': result.processing_stats
+                },
                 'report_file': str(report_file)
             })
+        
+    else:
+        # Use original sequential processing
+        pipeline = PIIRedactionPipeline(policy_path=policy_path, use_real_api=not llm_simulation)
+        
+        # Process each incident sequentially
+        all_results = []
+        
+        for i, incident in enumerate(incidents, 1):
+            # Extract incident ID automatically
+            incident_id = extract_incident_id(incident)
+            print(f"\n🔄 Processing Incident {i}/{len(incidents)}: {incident_id}")
             
-        except Exception as e:
-            print(f"❌ Error processing {incident_id}: {e}")
-            continue
+            # Extract text for processing
+            text_to_process = extract_text_from_incident(incident)
+            
+            # Process through pipeline
+            try:
+                # Create incident-specific directory within the main output directory
+                incident_output_dir = output_dir / f"incident_{incident_id}"
+                results = await pipeline.process_text(text_to_process, str(incident_output_dir))
+                
+                # Generate detailed report
+                report_file = generate_detailed_report(results, incident_id, output_dir)
+                
+                # Print summary
+                print_processing_summary(results, incident_id)
+                
+                # Store results
+                all_results.append({
+                    'incident_id': incident_id,
+                    'incident_index': i,
+                    'results': results,
+                    'report_file': str(report_file)
+                })
+                
+            except Exception as e:
+                print(f"❌ Error processing {incident_id}: {e}")
+                continue
     
     # Generate overall summary
     if all_results:
@@ -334,6 +400,10 @@ Automatic incident ID detection:
     parser.add_argument("--log-level", "-l", default="INFO", 
                        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
                        help="Set logging level")
+    parser.add_argument("--max-concurrent", "-c", type=int, default=5,
+                       help="Maximum number of concurrent incidents to process (default: 5)")
+    parser.add_argument("--disable-parallel", action="store_true",
+                       help="Disable parallel processing and use sequential mode")
     
     args = parser.parse_args()
     
@@ -343,7 +413,14 @@ Automatic incident ID detection:
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     
-    asyncio.run(process_incidents(args.file_path, args.output_dir, args.llm_simulation, args.policy))
+    asyncio.run(process_incidents(
+        args.file_path, 
+        args.output_dir, 
+        args.llm_simulation, 
+        args.policy,
+        args.max_concurrent,
+        not args.disable_parallel
+    ))
 
 if __name__ == "__main__":
     main()
