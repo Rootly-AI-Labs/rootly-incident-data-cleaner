@@ -3,11 +3,11 @@
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A comprehensive multi-stage pipeline for automatically detecting, removing, and pseudonymizing personally identifiable information (PII) and sensitive operational data from post-incident records obtained from platforms like , , Rootly, , PagerDuty, and BigPanda.
+A streamlined pipeline for automatically detecting, removing, and pseudonymizing personally identifiable information (PII) and sensitive operational data from Rootly incident reports.
 
 ## 🚀 Features
 
-- **Universal Processing**: Single script (`process_incidents.py`) handles any incident platform
+- **Rootly-Focused**: Optimized for processing Rootly incident data from JSONL files
 - **Parallel Processing**: Concurrent incident processing with configurable limits for 3-5x speedup
 - **Comprehensive PII Detection**: Emails, phones, SSNs, credit cards, names, IPs, and more
 - **Intelligent Redaction**: Context-aware redaction with pseudonymization consistency
@@ -18,23 +18,19 @@ A comprehensive multi-stage pipeline for automatically detecting, removing, and 
 
 ## 📋 Architecture
 
-The system operates as a professional two-tier architecture with comprehensive PII processing pipeline:
+The system operates as a streamlined architecture optimized for Rootly incident data:
 
 ### Data Collection Tier
-- ** Integration** ✅ - Collects structured incident data
-- ** Integration** ✅ - Retrieves incident reports and metadata
-- **Rootly Integration** ✅ - Gathers incident data via REST and GraphQL APIs
-- ** Integration** ✅ - Collects post-incident data via GraphQL
-- **PagerDuty Integration** ✅ - Retrieves incident and alert data
-- **BigPanda Integration** ✅ - Collects incident management data
+- **Rootly Integration** ✅ - Collects incident data via REST and GraphQL APIs
 
 ### Processing Tier
 - **Policy Management** ✅ - Defines PII categories and redaction policies  
 - **Deterministic Extraction** ✅ - Fast rule-based detection using regex/Presidio/spaCy
-- **LLM Detection** ✅ - Context-sensitive PII identification
-- **LLM Verification** ✅ - Validates flagged spans with policy-based decisions
-- **Arbitration Engine** ✅ - Combines results into final redaction decisions
-- **Quality Validation** ✅ - Ensures zero residual PII with schema validation
+- **LLM Enhancement** ✅ - Advanced detection and verification using GPT-4o/Claude-3.5-Sonnet
+- **Arbitration Engine** ✅ - Resolves conflicts between deterministic and LLM detections
+- **Redaction Engine** ✅ - Context-aware redaction with pseudonymization
+- **Quality Validation** ✅ - Post-processing validation and quality scoring
+- **Audit Trail** ✅ - Complete processing logs and decision tracking
 
 ## 🏗️ Complete Pipeline Flow
 
@@ -224,21 +220,41 @@ The following diagram shows the complete PII redaction pipeline flow with detail
 - Python 3.8 or higher
 - pip package manager
 
-### Quick Start
+## 🚀 Quick Start
+
+### Installation
 
 ```bash
 # Clone the repository
 git clone https://github.com/kishorealliiita/pii-incident-redaction.git
 cd pii-incident-redaction
 
-# Install using setup.py
+# Install dependencies
+pip install -r requirements.txt
+
+# Install the package
 pip install -e .
 
 # Install spaCy language model (required)
 python -m spacy download en_core_web_sm
+```
 
-# Run basic test
-python tests/test_pipeline.py
+### Basic Usage
+
+Process Rootly incident data from a JSONL file:
+
+```bash
+# Process Rootly incident data
+python main.py --input data/test_samples/rootly_samples.jsonl
+
+# Process with custom output directory
+python main.py --input data/test_samples/rootly_samples.jsonl --output results/
+
+# Use custom policy
+python main.py --input data/test_samples/rootly_samples.jsonl --policy custom_policy.json
+
+# Enable real LLM APIs (requires API keys)
+python main.py --input data/test_samples/rootly_samples.jsonl --real-api
 ```
 
 ### Optional: LLM API Setup
@@ -422,8 +438,7 @@ asyncio.run(process_incident())
 
 ```
 pii-incident-redaction/
-├── main.py                    # Main CLI entry point
-├── process_incidents.py       # Universal incident processing script
+├── main.py                    # Main CLI entry point for Rootly processing
 ├── setup.py                   # Package installation
 ├── requirements.txt           # Production dependencies
 ├── Makefile                   # Development commands
@@ -436,13 +451,9 @@ pii-incident-redaction/
 │   │   ├── pii_detector.py    # Presidio-based detection
 │   │   ├── pii_redactor.py    # Redaction engine
 │   │   └── llm_clients.py     # LLM API clients
-│   ├── data_collection/       # Data collection from incident platforms
-│   │   ├── _collector.py    #  integration
-│   │   ├── _collector.py  #  integration
+│   ├── data_collection/       # Data collection from Rootly
 │   │   ├── rootly_collector.py       # Rootly integration
-│   │   ├── _collector.py    #  integration
-│   │   ├── pagerduty_collector.py    # PagerDuty integration
-│   │   └── bigpanda_collector.py     # BigPanda integration
+│   │   └── README.md                 # Collection documentation
 │   ├── processing/             # PII processing components
 │   │   ├── deterministic_extractor.py # Rule-based detection
 │   │   ├── llm_detector.py            # LLM detection

@@ -138,6 +138,7 @@ test_results.json
 example_output/
 temp/
 tmp/
+temp_output/
 
 # IDE
 .vscode/

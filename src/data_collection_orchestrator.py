@@ -1,6 +1,6 @@
 """
 Data Collection Module
-Professional orchestrator for collecting incident data from various platforms
+Simplified orchestrator for collecting Rootly incident data
 """
 
 import json
@@ -10,12 +10,7 @@ from pathlib import Path
 from dataclasses import dataclass
 from datetime import datetime
 
-from .data_collection._collector import Collector
-from .data_collection._collector import Collector
 from .data_collection.rootly_collector import RootlyCollector
-from .data_collection._collector import Collector
-from .data_collection.pagerduty_collector import PagerDutyCollector
-from .data_collection.bigpanda_collector import BigPandaCollector
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +36,7 @@ class CollectionSummary:
     collection_timestamp: str
 
 class DataCollectionOrchestrator:
-    """Professional data collection orchestrator for incident management platforms"""
+    """Simplified data collection orchestrator for Rootly incident data"""
     
     def __init__(self, output_dir: str = "data/collected"):
         """Initialize the data collection orchestrator"""
@@ -49,30 +44,25 @@ class DataCollectionOrchestrator:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
-        # Initialize platform collectors
+        # Initialize Rootly collector only
         self.collectors = {
-            '': Collector(),
-            '': Collector(),
-            'rootly': RootlyCollector(),
-            '': Collector(),
-            'pagerduty': PagerDutyCollector(),
-            'bigpanda': BigPandaCollector()
+            'rootly': RootlyCollector()
         }
         
-        logger.info("Data Collection Orchestrator initialized")
+        logger.info("Data Collection Orchestrator initialized for Rootly")
     
-    def collect_from_platform(self, platform: str, api_key: Optional[str] = None, 
+    def collect_from_platform(self, platform: str = "rootly", api_key: Optional[str] = None, 
                            num_samples: int = 10) -> CollectionResult:
-        """Collect data from a specific platform"""
+        """Collect data from Rootly platform"""
         
-        if platform not in self.collectors:
+        if platform != "rootly":
             return CollectionResult(
                 platform=platform,
                 incidents_collected=0,
                 output_file="",
                 collection_time=datetime.now().isoformat(),
                 success=False,
-                error_message=f"Unsupported platform: {platform}"
+                error_message=f"Only Rootly platform is supported. Requested: {platform}"
             )
         
         try:
@@ -112,28 +102,28 @@ class DataCollectionOrchestrator:
     
     def collect_from_all_platforms(self, api_keys: Optional[Dict[str, str]] = None,
                                  num_samples_per_platform: int = 10) -> CollectionSummary:
-        """Collect data from all supported platforms"""
+        """Collect data from Rootly platform (simplified for single platform)"""
         
-        logger.info("Starting data collection from all platforms")
+        logger.info("Starting data collection from Rootly")
         
         results = []
         successful_collections = 0
         failed_collections = 0
         total_incidents = 0
         
-        for platform in self.collectors.keys():
-            api_key = api_keys.get(platform) if api_keys else None
-            result = self.collect_from_platform(platform, api_key, num_samples_per_platform)
-            results.append(result)
-            
-            if result.success:
-                successful_collections += 1
-                total_incidents += result.incidents_collected
-            else:
-                failed_collections += 1
+        # Only collect from Rootly
+        api_key = api_keys.get('rootly') if api_keys else None
+        result = self.collect_from_platform('rootly', api_key, num_samples_per_platform)
+        results.append(result)
+        
+        if result.success:
+            successful_collections += 1
+            total_incidents += result.incidents_collected
+        else:
+            failed_collections += 1
         
         summary = CollectionSummary(
-            total_platforms=len(self.collectors),
+            total_platforms=1,  # Only Rootly
             successful_collections=successful_collections,
             failed_collections=failed_collections,
             total_incidents=total_incidents,
@@ -165,23 +155,22 @@ class DataCollectionOrchestrator:
                 ]
             }, f, indent=2)
         
-        logger.info(f"Data collection completed: {successful_collections}/{len(self.collectors)} platforms successful")
+        logger.info(f"Data collection completed: {successful_collections}/1 platforms successful")
         return summary
     
     def get_supported_platforms(self) -> List[str]:
-        """Get list of supported platforms"""
-        return list(self.collectors.keys())
+        """Get list of supported platforms (only Rootly)"""
+        return ['rootly']
     
     def validate_api_keys(self, api_keys: Dict[str, str]) -> Dict[str, bool]:
-        """Validate API keys for all platforms"""
+        """Validate API keys for Rootly platform"""
         validation_results = {}
         
-        for platform, api_key in api_keys.items():
-            if platform in self.collectors:
-                # In production, this would make actual API calls to validate
-                validation_results[platform] = bool(api_key and len(api_key) > 10)
-            else:
-                validation_results[platform] = False
+        if 'rootly' in api_keys:
+            # In production, this would make actual API calls to validate
+            validation_results['rootly'] = bool(api_keys['rootly'] and len(api_keys['rootly']) > 10)
+        else:
+            validation_results['rootly'] = False
         
         return validation_results
     
