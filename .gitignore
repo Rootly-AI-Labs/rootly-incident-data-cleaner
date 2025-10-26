@@ -170,7 +170,15 @@ models/
 
 # Data files
 *.csv
-*.jsonl
 *.parquet
 data/raw/
 data/processed/
+data/*/samples/
+# Only ignore generated JSONL files in output directories, not test samples
+output/**/*.jsonl
+example_output/**/*.jsonl
+temp_output/**/*.jsonl
+
+#database
+incidents.db
+*.db
