@@ -3,219 +3,45 @@
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A comprehensive multi-stage pipeline for automatically detecting, removing, and pseudonymizing personally identifiable information (PII) and sensitive operational data from post-incident records obtained from platforms like , , Rootly, , PagerDuty, and BigPanda.
+A comprehensive pipeline for automatically detecting, removing, and pseudonymizing personally identifiable information (PII) and sensitive operational data from Rootly incident reports.
 
 ## 🚀 Features
 
-- **Universal Processing**: Single script (`process_incidents.py`) handles any incident platform
+- **Rootly-Focused**: Optimized for processing Rootly incident data from JSONL files
 - **Parallel Processing**: Concurrent incident processing with configurable limits for 3-5x speedup
 - **Comprehensive PII Detection**: Emails, phones, SSNs, credit cards, names, IPs, and more
 - **Intelligent Redaction**: Context-aware redaction with pseudonymization consistency
 - **Quality Assurance**: Validation and post-check with zero residual PII verification
 - **LLM Integration**: Support for OpenAI GPT-4o and Anthropic Claude-3.5-Sonnet
+- **Database Storage**: SQLite database for incident management and tracking
 - **Policy-Driven**: Configurable redaction policies via JSON files
 - **Audit Trails**: Complete processing logs for compliance and debugging
 
 ## 📋 Architecture
 
-The system operates as a professional two-tier architecture with comprehensive PII processing pipeline:
+The system provides a comprehensive architecture for processing Rootly incident data:
 
-### Data Collection Tier
-- ** Integration** ✅ - Collects structured incident data
-- ** Integration** ✅ - Retrieves incident reports and metadata
-- **Rootly Integration** ✅ - Gathers incident data via REST and GraphQL APIs
-- ** Integration** ✅ - Collects post-incident data via GraphQL
-- **PagerDuty Integration** ✅ - Retrieves incident and alert data
-- **BigPanda Integration** ✅ - Collects incident management data
-
-### Processing Tier
+### Core Components
 - **Policy Management** ✅ - Defines PII categories and redaction policies  
 - **Deterministic Extraction** ✅ - Fast rule-based detection using regex/Presidio/spaCy
-- **LLM Detection** ✅ - Context-sensitive PII identification
-- **LLM Verification** ✅ - Validates flagged spans with policy-based decisions
-- **Arbitration Engine** ✅ - Combines results into final redaction decisions
-- **Quality Validation** ✅ - Ensures zero residual PII with schema validation
+- **LLM Enhancement** ✅ - Advanced detection and verification using GPT-4o/Claude-3.5-Sonnet
+- **Arbitration Engine** ✅ - Resolves conflicts between deterministic and LLM detections
+- **Redaction Engine** ✅ - Context-aware redaction with pseudonymization
+- **Quality Validation** ✅ - Post-processing validation and quality scoring
+- **Database Storage** ✅ - SQLite database for incident management
+- **Audit Trail** ✅ - Complete processing logs and decision tracking
+- **Parallel Processing** ✅ - Concurrent incident processing with configurable limits
 
-## 🏗️ Complete Pipeline Flow
+## 🏗️ Pipeline Overview
 
-The following diagram shows the complete PII redaction pipeline flow with detailed processing steps:
+The system processes incidents through a five-stage pipeline:
 
-```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                           PII REDACTION PIPELINE                                │
-│                              ( Example)                             │
-└─────────────────────────────────────────────────────────────────────────────────┘
-
-┌─────────────────┐    ┌─────────────────────────────────────────────────────────┐
-│   DATA SOURCE   │    │                DATA COLLECTION TIER                    │
-│                 │    │                                                         │
-│      │───▶│  ┌─────────────────────────────────────────────────┐   │
-│  API Endpoint   │    │  │         Data Collection Orchestrator            │   │
-│                 │    │  │                                                 │   │
-│  • Incidents    │    │  │  ┌─────────────────────────────────────────┐   │   │
-│  • Timelines    │    │  │  │         Collector            │   │   │
-│  • Updates      │    │  │  │                                         │   │   │
-│  • Comments     │    │  │  │  • REST API Integration                 │   │   │
-│  • Attachments  │    │  │  │  • Authentication & Rate Limiting        │   │   │
-│  • Metadata     │    │  │  │  • Data Transformation                 │   │   │
-│                 │    │  │  │  • JSONL Output Generation              │   │   │
-│                 │    │  │  └─────────────────────────────────────────┘   │   │
-│                 │    │  └─────────────────────────────────────────────────┘   │
-└─────────────────┘    └─────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                           PROCESSING TIER                                       │
-└─────────────────────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│  STEP 1: POLICY MANAGEMENT                                                      │
-│                                                                                 │
-│  ┌─────────────────────────────────────────────────────────────────────────┐   │
-│  │                    Policy Manager                                        │   │
-│  │                                                                         │   │
-│  │  • PII Categories (PII, OPERATIONAL_IDENTIFIERS, SECRETS)              │   │
-│  │  • Sensitivity Levels (CRITICAL, HIGH, MEDIUM, LOW)                   │   │
-│  │  • Redaction Actions (REDACT, PSEUDONYMIZE, RETAIN)                   │   │
-│  │  • Pattern Definitions (regex, Presidio entities, keywords)            │   │
-│  │  • Force Rules (emails always REDACT, etc.)                           │   │
-│  └─────────────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│  STEP 2: DETERMINISTIC EXTRACTION                                               │
-│                                                                                 │
-│  ┌─────────────────────────────────────────────────────────────────────────┐   │
-│  │                Deterministic Extractor                                 │   │
-│  │                                                                         │   │
-│  │  Input: Raw incident text                                               │   │
-│  │  ┌─────────────────────────────────────────────────────────────────┐   │   │
-│  │  │ "Incident #INC-123: Database breach detected.                   │   │   │
-│  │  │  Contact: john.doe@company.com, Phone: +1-555-123-4567           │   │   │
-│  │  │  Affected: Alice Johnson, SSN: 123-45-6789"                      │   │   │
-│  │  └─────────────────────────────────────────────────────────────────┘   │   │
-│  │                                                                         │   │
-│  │  Detection Methods:                                                     │   │
-│  │  • Microsoft Presidio (emails, phones, SSNs)                          │   │
-│  │  • Regex patterns (credit cards, IPs, hostnames)                       │   │
-│  │  • Keyword matching (API keys, customer IDs)                          │   │
-│  │  • spaCy NER (person names, organizations)                             │   │
-│  │                                                                         │   │
-│  │  Output: Detected entities + candidate spans for LLM review            │   │
-│  └─────────────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│  STEP 3: LLM DETECTION (FINDER)                                                │
-│                                                                                 │
-│  ┌─────────────────────────────────────────────────────────────────────────┐   │
-│  │                    LLM Detector                                         │   │
-│  │                                                                         │   │
-│  │  Model: GPT-4o (OpenAI)                                                 │   │
-│  │                                                                         │   │
-│  │  • Context-sensitive PII identification                                │   │
-│  │  • Additional entity detection beyond deterministic                     │   │
-│  │  • Confidence scoring for each detection                                │   │
-│  │  • Reasoning for detected spans                                          │   │
-│  │                                                                         │   │
-│  │  Example Detection:                                                     │   │
-│  │  ┌─────────────────────────────────────────────────────────────────┐   │   │
-│  │  │ "john.doe@company.com" → EMAIL (confidence: 0.95)               │   │   │
-│  │  │ "+1-555-123-4567" → PHONE (confidence: 0.92)                    │   │   │
-│  │  │ "Alice Johnson" → PERSON_NAME (confidence: 0.88)                 │   │   │
-│  │  │ "123-45-6789" → SSN (confidence: 0.98)                          │   │   │
-│  │  └─────────────────────────────────────────────────────────────────┘   │   │
-│  └─────────────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│  STEP 4: LLM VERIFICATION (JUDGE)                                              │
-│                                                                                 │
-│  ┌─────────────────────────────────────────────────────────────────────────┐   │
-│  │                    LLM Verifier                                        │   │
-│  │                                                                         │   │
-│  │  Model: Claude-3.5-Sonnet (Anthropic)                                  │   │
-│  │                                                                         │   │
-│  │  • Policy-based decision making                                        │   │
-│  │  • Context-aware redaction decisions                                   │   │
-│  │  • Compliance risk assessment                                          │   │
-│  │  • Detailed reasoning for each decision                                │   │
-│  │                                                                         │   │
-│  │  Example Decisions:                                                    │   │
-│  │  ┌─────────────────────────────────────────────────────────────────┐   │   │
-│  │  │ "john.doe@company.com" → REDACT (High risk, policy violation)   │   │   │
-│  │  │ "+1-555-123-4567" → REDACT (High risk, contact info)            │   │   │
-│  │  │ "Alice Johnson" → PSEUDONYMIZE (Medium risk, employee name)     │   │   │
-│  │  │ "123-45-6789" → REDACT (Critical risk, SSN)                      │   │   │
-│  │  └─────────────────────────────────────────────────────────────────┘   │   │
-│  └─────────────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│  STEP 5: ARBITRATION & REDACTION                                               │
-│                                                                                 │
-│  ┌─────────────────────────────────────────────────────────────────────────┐   │
-│  │                Arbitration Engine                                      │   │
-│  │                                                                         │   │
-│  │  • Weighted voting system (Judge: 3, Finder: 2, Deterministic: 1)     │   │
-│  │  • Force rule application (emails always REDACT)                        │   │
-│  │  • Context-dependent adjustments                                        │   │
-│  │  • Consistent pseudonym generation                                      │   │
-│  │                                                                         │   │
-│  │  Text Processing:                                                       │   │
-│  │  ┌─────────────────────────────────────────────────────────────────┐   │   │
-│  │  │ Original: "Contact: john.doe@company.com, Phone: +1-555-123-4567"│   │   │
-│  │  │ Processed: "Contact: [REDACTED_EMAIL], Phone: [REDACTED_PHONE]"  │   │   │
-│  │  │                                                                 │   │   │
-│  │  │ Original: "Affected: Alice Johnson"                             │   │   │
-│  │  │ Processed: "Affected: Person_cfaaca"                             │   │   │
-│  │  └─────────────────────────────────────────────────────────────────┘   │   │
-│  └─────────────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│  STEP 6: QUALITY VALIDATION                                                   │
-│                                                                                 │
-│  ┌─────────────────────────────────────────────────────────────────────────┐   │
-│  │                Quality Validator                                        │   │
-│  │                                                                         │   │
-│  │  • Residual PII detection (zero PII verification)                      │   │
-│  │  • Schema integrity validation                                          │   │
-│  │  • Consistency checking                                                 │   │
-│  │  • Adversarial pattern detection                                        │   │
-│  │  • Quality metrics calculation (precision, recall, F1)                 │   │
-│  │                                                                         │   │
-│  │  Quality Metrics:                                                       │   │
-│  │  ┌─────────────────────────────────────────────────────────────────┐   │   │
-│  │  │ Overall Quality Score: 0.95 (EXCELLENT)                        │   │   │
-│  │  │ Precision: 0.98 (98% correct redactions)                         │   │   │
-│  │  │ Recall: 0.96 (96% PII detected)                                  │   │   │
-│  │  │ F1 Score: 0.97                                                  │   │   │
-│  │  │ Validation Issues: 0 (Zero residual PII)                         │   │   │
-│  │  └─────────────────────────────────────────────────────────────────┘   │   │
-│  └─────────────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                              FINAL OUTPUT                                      │
-│                                                                                 │
-│  ┌─────────────────────────────────────────────────────────────────────────┐   │
-│  │                    Processed Incident Data                             │   │
-│  │                                                                         │   │
-│  │  ✅ Zero residual PII                                                   │   │
-│  │  ✅ Schema integrity preserved                                          │   │
-│  │  ✅ Consistent pseudonymization                                        │   │
-│  │  ✅ Complete audit trail                                               │   │
-│  │  ✅ Quality metrics available                                          │   │
-│  └─────────────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────────────┘
-```
+1. **Policy Management** - Loads PII categories, sensitivity levels, and redaction rules
+2. **Deterministic Extraction** - Fast rule-based detection using Presidio, regex, and spaCy
+3. **LLM Detection** - Advanced context-aware PII detection using GPT-4o
+4. **LLM Verification** - Policy-driven decision making using Claude-3.5-Sonnet
+5. **Arbitration & Redaction** - Combines detections and applies redaction/pseudonymization
+6. **Quality Validation** - Validates output and checks for residual PII
 
 ## 🛠️ Installation
 
@@ -224,22 +50,26 @@ The following diagram shows the complete PII redaction pipeline flow with detail
 - Python 3.8 or higher
 - pip package manager
 
-### Quick Start
+## 🚀 Quick Start
+
+### Installation
 
 ```bash
 # Clone the repository
 git clone https://github.com/kishorealliiita/pii-incident-redaction.git
 cd pii-incident-redaction
 
-# Install using setup.py
+# Install dependencies
+pip install -r requirements.txt
+
+# Install the package
 pip install -e .
 
 # Install spaCy language model (required)
 python -m spacy download en_core_web_sm
-
-# Run basic test
-python tests/test_pipeline.py
 ```
+
+## 🚀 Usage
 
 ### Optional: LLM API Setup
 
@@ -251,11 +81,9 @@ export OPENAI_API_KEY="your-openai-api-key"
 export ANTHROPIC_API_KEY="your-anthropic-api-key"
 ```
 
-## 🚀 Usage
+### Processing Rootly Incidents with `process_incidents.py`
 
-### Primary Usage: `process_incidents.py`
-
-The main way to use this system is through the universal `process_incidents.py` script that automatically handles any incident platform:
+The main way to use this system is through the `process_incidents.py` script designed for Rootly incident data:
 
 #### Basic Usage
 
@@ -264,23 +92,23 @@ The main way to use this system is through the universal `process_incidents.py` 
 python process_incidents.py data/test_samples/rootly_samples.jsonl --max-concurrent 5
 
 # Process with custom concurrency limits
-python process_incidents.py data/test_samples/_samples.jsonl --max-concurrent 10 --llm-simulation
+python process_incidents.py data/test_samples/rootly_samples.jsonl --max-concurrent 10 --llm-simulation
 
 # Disable parallel processing (use sequential mode)
-python process_incidents.py data/test_samples/_samples.jsonl --disable-parallel
+python process_incidents.py data/test_samples/rootly_samples.jsonl --disable-parallel
 
 # Process with custom output directory and parallel processing
-python process_incidents.py data/test_samples/pagerduty_samples.jsonl --output-dir output/production_results --max-concurrent 8
+python process_incidents.py data/test_samples/rootly_samples_extended.jsonl --output-dir output/production_results --max-concurrent 8
 ```
 
 #### Advanced Usage
 
 ```bash
 # Process with real LLM APIs (requires API keys)
-python process_incidents.py data/test_samples/_samples.jsonl --output-dir output/production_results
+python process_incidents.py data/test_samples/rootly_samples.jsonl --output-dir output/production_results
 
 # Process with debug logging
-python process_incidents.py data/test_samples/bigpanda_samples.jsonl --log-level DEBUG
+python process_incidents.py data/test_samples/rootly_samples.jsonl --log-level DEBUG
 
 # Process single JSON file
 python process_incidents.py data/sample/sample_incident_data.json --llm-simulation
@@ -316,7 +144,7 @@ The script automatically detects incident IDs from these fields:
 ### Example Output
 
 ```bash
-📁 Loaded 3 incident(s) from data/test_samples/pagerduty_samples.jsonl
+📁 Loaded 3 incident(s) from data/test_samples/rootly_samples.jsonl
 🚀 Initializing PII Redaction Pipeline...
 💡 LLM simulation mode enabled - no API calls will be made
 
@@ -356,16 +184,16 @@ INCIDENT: PXXXXXXX
 
 ORIGINAL:
   Title: Database Replication Lag
-Summary: Read replica synchronization falling behind primary database causing stale data in customer dashboards. Incident Commander Jennifer Liu (jennifer.liu@pagerduty.com) escalated to Principal Database Engineer Michael Chen (michael.chen@pagerduty.com) following multiple customer reports via support@pagerduty.com...
+Summary: Read replica synchronization falling behind primary database causing stale data in customer dashboards. Incident Commander Alice Johnson (alice.johnson@company.com) escalated to Principal Database Engineer Bob Smith (bob.smith@company.com) following multiple customer reports via support@company.com...
 
 PROCESSED:
   Title: Database Replication Lag
-Summary: Read replica synchronization falling behind primary database causing stale data in customer dashboards. Incident Commander Jennifer Liu ([REDACTED_EMAIL]) escalated to Principal Database Engineer Michael Chen ([REDACTED_EMAIL]) following multiple customer reports via [REDACTED_EMAIL]...
+Summary: Read replica synchronization falling behind primary database causing stale data in customer dashboards. Incident Commander Alice Johnson ([REDACTED_EMAIL]) escalated to Principal Database Engineer Bob Smith ([REDACTED_EMAIL]) following multiple customer reports via [REDACTED_EMAIL]...
 
 ================================================================================
 OVERALL PROCESSING SUMMARY
 ================================================================================
-📁 Source File: pagerduty_samples.jsonl
+📁 Source File: rootly_samples.jsonl
 📊 Total Incidents Processed: 3
 📈 Average Quality Score: 0.000
 📉 Average Text Reduction: 8.9%
@@ -373,9 +201,9 @@ OVERALL PROCESSING SUMMARY
 ⚠️  Total Validation Issues: 37
 🚨 Total Critical Issues: 0
 
-📁 Detailed reports saved to: output/pagerduty_demo
+📁 Detailed reports saved to: output/rootly_processing
 
-✅ Processing complete! Reports saved to: output/pagerduty_demo
+✅ Processing complete! Reports saved to: output/rootly_processing
 📊 Processed 3 incidents successfully
 ```
 
@@ -418,17 +246,78 @@ async def process_incident():
 asyncio.run(process_incident())
 ```
 
+### Database Management with `db_cli.py`
+
+The system includes a SQLite database for incident management and tracking:
+
+#### Loading Incidents
+
+```bash
+# Load incidents from JSONL file
+python db_cli.py load --input data/test_samples/rootly_samples.jsonl
+
+# Load with verbose output
+python db_cli.py load --input data/test_samples/rootly_samples.jsonl --verbose
+```
+
+#### Processing Incidents
+
+```bash
+# Process unprocessed incidents
+python db_cli.py process
+
+# Process with limit
+python db_cli.py process --limit 5
+
+# Process with verbose output
+python db_cli.py process --limit 10 --verbose
+```
+
+#### Viewing Statistics
+
+```bash
+# View database statistics
+python db_cli.py stats
+```
+
+#### Retrieving Incident Details
+
+```bash
+# Get incident details
+python db_cli.py get --id <incident_id>
+
+# Get incident with processing results
+python db_cli.py get --id <incident_id> --include-processing
+```
+
+#### Listing Incidents
+
+```bash
+# List all incidents
+python db_cli.py list
+
+# List with limit
+python db_cli.py list --limit 10
+
+# List unprocessed incidents
+python db_cli.py list --unprocessed
+```
+
+For more database documentation, see [DATABASE_MVP_README.md](DATABASE_MVP_README.md).
+
 ## 📁 Project Structure
 
 ```
 pii-incident-redaction/
-├── main.py                    # Main CLI entry point
-├── process_incidents.py       # Universal incident processing script
+├── main.py                    # CLI entry point for Rootly processing
+├── process_incidents.py       # Rootly incident processing script
+├── db_cli.py                  # Database CLI for incident management
 ├── setup.py                   # Package installation
 ├── requirements.txt           # Production dependencies
 ├── Makefile                   # Development commands
 ├── LICENSE                    # MIT License
 ├── README.md                  # This documentation
+├── DATABASE_MVP_README.md    # Database documentation
 ├── .gitignore                 # Git ignore rules
 │
 ├── src/                       # Source code
@@ -436,22 +325,18 @@ pii-incident-redaction/
 │   │   ├── pii_detector.py    # Presidio-based detection
 │   │   ├── pii_redactor.py    # Redaction engine
 │   │   └── llm_clients.py     # LLM API clients
-│   ├── data_collection/       # Data collection from incident platforms
-│   │   ├── _collector.py    #  integration
-│   │   ├── _collector.py  #  integration
-│   │   ├── rootly_collector.py       # Rootly integration
-│   │   ├── _collector.py    #  integration
-│   │   ├── pagerduty_collector.py    # PagerDuty integration
-│   │   └── bigpanda_collector.py     # BigPanda integration
 │   ├── processing/             # PII processing components
 │   │   ├── deterministic_extractor.py # Rule-based detection
 │   │   ├── llm_detector.py            # LLM detection
 │   │   ├── llm_verifier.py            # LLM verification
 │   │   ├── arbitration_engine.py      # Decision arbitration
 │   │   └── quality_validator.py       # Quality assurance
+│   ├── database/              # Database components
+│   │   └── incident_db.py     # SQLite database for incident storage
 │   ├── policies/              # Policy management
 │   │   └── policy_manager.py  # Policy definition and management
 │   ├── processing_pipeline.py # Main processing orchestrator
+│   ├── parallel_processing_pipeline.py # Parallel processing orchestrator
 │   └── data_collection_orchestrator.py # Data collection orchestrator
 │
 ├── config/                    # Configuration files
@@ -466,10 +351,15 @@ pii-incident-redaction/
 │   └── test_samples/          # Generated test samples
 │
 ├── examples/                  # Usage examples
-│   └── basic_usage.py         # Basic usage examples
+│   ├── basic_usage.py         # Basic usage examples
+│   └── parallel_processing_demo.py # Parallel processing examples
 │
-└── tests/                     # Test suite
-    └── test_pipeline.py       # Pipeline tests
+├── tests/                     # Test suite
+│   ├── test_pipeline.py       # Basic pipeline tests
+│   ├── test_comprehensive_pipeline.py # Comprehensive tests
+│   └── test_performance.py    # Performance benchmarks
+│
+└── output/                    # Processing results (generated)
 ```
 
 ## 🔧 Configuration
@@ -594,10 +484,11 @@ The test suite covers:
 
 ### Data Handling
 
-- **No Data Storage**: Processed text is not stored permanently
+- **Optional Database Storage**: SQLite database for incident tracking (optional feature)
 - **Local Processing**: All processing happens locally by default
 - **API Key Security**: API keys stored in environment variables
 - **Audit Trails**: Complete processing logs for compliance
+- **Data Control**: Process data without storing, or use database for tracking
 
 ### Compliance
 
@@ -615,7 +506,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **Microsoft Presidio** for PII detection capabilities
 - **spaCy** for natural language processing
 - **OpenAI** and **Anthropic** for LLM integration
-- ****, ****, **Rootly**, ****, **PagerDuty**, and **BigPanda** for incident management inspiration
+- **Rootly** for incident management platform integration
 
 ---
 
