@@ -1,5 +1,6 @@
 """
-LLM Client implementations for OpenAI GPT-4o and Anthropic Claude-3.5-Sonnet
+LLM client implementations. Concrete model names are read from configuration
+(see config/llm_models.json); this module is agnostic to specific versions.
 """
 
 import json
@@ -37,7 +38,7 @@ class LLMClient(ABC):
         pass
 
 class OpenAIClient(LLMClient):
-    """OpenAI GPT-4o client"""
+    """OpenAI client. Model is configured via LLMModel.model_name."""
     
     def _setup_client(self):
         """Setup OpenAI client"""
@@ -68,7 +69,7 @@ class OpenAIClient(LLMClient):
             self.client = None
     
     async def analyze_spans(self, text: str, spans: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-        """Analyze spans using GPT-4o"""
+        """Analyze spans using the configured OpenAI model"""
         if not self.client:
             return self._simulate_analysis(spans)
         
@@ -94,7 +95,7 @@ class OpenAIClient(LLMClient):
             
             # Parse response
             analysis = self._parse_finder_response(response.choices[0].message.content, spans)
-            logger.info(f"GPT-4o analyzed {len(spans)} spans")
+            logger.info(f"{self.model.model_name} analyzed {len(spans)} spans")
             return analysis
             
         except Exception as e:
@@ -102,7 +103,7 @@ class OpenAIClient(LLMClient):
             return self._simulate_analysis(spans)
     
     async def judge_redaction(self, text: str, detected_entity: Dict[str, Any], policy_context: str) -> Dict[str, Any]:
-        """Judge redaction using GPT-4o"""
+        """Judge redaction using the configured OpenAI model"""
         if not self.client:
             return self._simulate_judgement(detected_entity)
         
@@ -126,7 +127,7 @@ class OpenAIClient(LLMClient):
             )
             
             judgement = self._parse_judge_response(response.choices[0].message.content, detected_entity)
-            logger.info(f"GPT-4o judged {detected_entity.get('entity_type', 'unknown')} entity")
+            logger.info(f"{self.model.model_name} judged {detected_entity.get('entity_type', 'unknown')} entity")
             return judgement
             
         except Exception as e:
@@ -207,7 +208,7 @@ Respond with JSON:
 """
     
     def _parse_finder_response(self, response: str, spans: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-        """Parse GPT-4o finder response"""
+        """Parse OpenAI finder response"""
         try:
             # Extract JSON from response
             json_start = response.find('{')
@@ -224,7 +225,7 @@ Respond with JSON:
                     'confidence_adjustment': min(0.2, max(-0.1, float(analysis.get('confidence', 0.8)) - 0.8)),
                     'additional_context': analysis.get('additional_pii', ''),
                     'requires_expert_review': float(analysis.get('confidence', 0.8)) < 0.7,
-                    'reasoning': analysis.get('reasoning', 'GPT-4o analysis'),
+                    'reasoning': analysis.get('reasoning', f'{self.model.model_name} analysis'),
                     'alternative_classification': None,
                     'context_sensitivity': 'medium'
                 }
@@ -232,11 +233,11 @@ Respond with JSON:
             return results
             
         except Exception as e:
-            logger.error(f"Failed to parse GPT-4o finder response: {e}")
+            logger.error(f"Failed to parse OpenAI finder response: {e}")
             return self._simulate_analysis(spans)
-    
+
     def _parse_judge_response(self, response: str, entity: Dict[str, Any]) -> Dict[str, Any]:
-        """Parse GPT-4o judge response"""
+        """Parse OpenAI judge response"""
         try:
             json_start = response.find('{')
             json_end = response.rfind('}') + 1
@@ -256,7 +257,7 @@ Respond with JSON:
             }
             
         except Exception as e:
-            logger.error(f"Failed to parse GPT-4o judge response: {e}")
+            logger.error(f"Failed to parse OpenAI judge response: {e}")
             return self._simulate_judgement(entity)
     
     def _simulate_analysis(self, spans: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
@@ -267,7 +268,7 @@ Respond with JSON:
                 'confidence_adjustment': 0.1,
                 'additional_context': True,
                 'requires_expert_review': span.get('confidence', 0.8) < 0.7,
-                'reasoning': 'Simulated GPT-4o analysis (API unavailable)',
+                'reasoning': f'Simulated {self.model.model_name} analysis (API unavailable)',
                 'alternative_classification': None,
                 'context_sensitivity': 'medium'
             }
@@ -290,7 +291,7 @@ Respond with JSON:
             'keep_redaction': decision in ['REDACT', 'PSEUDONYMIZE'],
             'replacement_hint': None,
             'confidence': 0.7,
-            'reasoning': f'Simulated GPT-4o judgement for {entity_type}',
+            'reasoning': f'Simulated {self.model.model_name} judgement for {entity_type}',
             'policy_violation_level': 'MEDIUM',
             'decision': decision,
             'llm_model': f'simulated_{self.model.model_name}',
@@ -298,7 +299,7 @@ Respond with JSON:
         }
 
 class AnthropicClient(LLMClient):
-    """Anthropic Claude-3.5-Sonnet client"""
+    """Anthropic client. Model is configured via LLMModel.model_name."""
     
     def _setup_client(self):
         """Setup Anthropic client"""
@@ -329,7 +330,7 @@ class AnthropicClient(LLMClient):
             self.client = None
     
     async def analyze_spans(self, text: str, spans: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-        """Analyze spans using Claude-3.5-Sonnet"""
+        """Analyze spans using the configured Anthropic model"""
         if not self.client:
             return self._simulate_analysis(spans)
         
@@ -349,7 +350,7 @@ class AnthropicClient(LLMClient):
             )
             
             analysis = self._parse_finder_response(response.content[0].text, spans)
-            logger.info(f"Claude-3.5-Sonnet analyzed {len(spans)} spans")
+            logger.info(f"{self.model.model_name} analyzed {len(spans)} spans")
             return analysis
             
         except Exception as e:
@@ -357,7 +358,7 @@ class AnthropicClient(LLMClient):
             return self._simulate_analysis(spans)
     
     async def judge_redaction(self, text: str, detected_entity: Dict[str, Any], policy_context: str) -> Dict[str, Any]:
-        """Judge redaction using Claude-3.5-Sonnet"""
+        """Judge redaction using the configured Anthropic model"""
         if not self.client:
             return self._simulate_judgement(detected_entity)
         
@@ -377,7 +378,7 @@ class AnthropicClient(LLMClient):
             )
             
             judgement = self._parse_judge_response(response.content[0].text, detected_entity)
-            logger.info(f"Claude-3.5-Sonnet judged {detected_entity.get('entity_type', 'unknown')} entity")
+            logger.info(f"{self.model.model_name} judged {detected_entity.get('entity_type', 'unknown')} entity")
             return judgement
             
         except Exception as e:
@@ -459,7 +460,7 @@ Provide structured judgement:
 """
     
     def _parse_finder_response(self, response: str, spans: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-        """Parse Claude-3.5-Sonnet finder response"""
+        """Parse Anthropic finder response"""
         try:
             json_start = response.find('{')
             json_end = response.rfind('}') + 1
@@ -477,7 +478,7 @@ Provide structured judgement:
                     'confidence_adjustment': min(0.25, max(-0.15, sensitivity_score - 0.6)),
                     'additional_context': analysis.get('contextual_pii', ''),
                     'requires_expert_review': analysis.get('compliance_risk') == 'HIGH',
-                    'reasoning': analysis.get('reasoning', 'Claude-3.5-Sonnet analysis'),
+                    'reasoning': analysis.get('reasoning', f'{self.model.model_name} analysis'),
                     'alternative_classification': None,
                     'context_sensitivity': analysis.get('compliance_risk', 'MEDIUM').lower()
                 }
@@ -485,11 +486,11 @@ Provide structured judgement:
             return results
             
         except Exception as e:
-            logger.error(f"Failed to parse Claude-3.5-Sonnet finder response: {e}")
+            logger.error(f"Failed to parse Anthropic finder response: {e}")
             return self._simulate_analysis(spans)
-    
+
     def _parse_judge_response(self, response: str, entity: Dict[str, Any]) -> Dict[str, Any]:
-        """Parse Claude-3.5-Sonnet judge response"""
+        """Parse Anthropic judge response"""
         try:
             json_start = response.find('{')
             json_end = response.rfind('}') + 1
@@ -511,7 +512,7 @@ Provide structured judgement:
             }
             
         except Exception as e:
-            logger.error(f"Failed to parse Claude-3.5-Sonnet judge response: {e}")
+            logger.error(f"Failed to parse Anthropic judge response: {e}")
             return self._simulate_judgement(entity)
     
     def _simulate_analysis(self, spans: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
@@ -522,7 +523,7 @@ Provide structured judgement:
                 'confidence_adjustment': 0.15,
                 'additional_context': True,
                 'requires_expert_review': span.get('confidence', 0.8) < 0.6,
-                'reasoning': 'Simulated Claude-3.5-Sonnet analysis (API unavailable)',
+                'reasoning': f'Simulated {self.model.model_name} analysis (API unavailable)',
                 'alternative_classification': None,
                 'context_sensitivity': 'high'
             }
@@ -545,7 +546,7 @@ Provide structured judgement:
             'keep_redaction': decision in ['REDACT', 'PSEUDONYMIZE'],
             'replacement_hint': None,
             'confidence': 0.85,
-            'reasoning': f'Simulated Claude-3.5-Sonnet judgement for {entity_type}',
+            'reasoning': f'Simulated {self.model.model_name} judgement for {entity_type}',
             'policy_violation_level': 'HIGH' if decision == 'REDACT' else 'MEDIUM',
             'decision': decision,
             'risk_factors': ['simulated_analysis'],

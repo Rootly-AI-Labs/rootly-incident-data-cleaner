@@ -1,6 +1,7 @@
 """
 LLM Configuration for PII Pipeline
-Supports OpenAI GPT-4o and Anthropic Claude-3.5-Sonnet
+Default providers: OpenAI (finder) and Anthropic (judge). Models are read from
+config/llm_models.json and can be overridden there.
 """
 
 import os
@@ -51,21 +52,21 @@ class LLMConfigManager:
         return LLMConfig(
             finder_model=LLMModel(
                 provider=LLMProvider.OPENAI,
-                model_name="gpt-4o",
+                model_name="gpt-5",
                 api_key_env_var="OPENAI_API_KEY",
                 max_tokens=2000,
                 temperature=0.1
             ),
             judge_model=LLMModel(
                 provider=LLMProvider.ANTHROPIC,
-                model_name="claude-3-5-sonnet-20241022",
+                model_name="claude-sonnet-4-6",
                 api_key_env_var="ANTHROPIC_API_KEY",
                 max_tokens=1500,
                 temperature=0.05
             ),
             fallback_model=LLMModel(
                 provider=LLMProvider.OPENAI,
-                model_name="gpt-4o-mini",
+                model_name="gpt-5-mini",
                 api_key_env_var="OPENAI_API_KEY",
                 max_tokens=256,
                 temperature=0.2
