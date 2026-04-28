@@ -19,6 +19,8 @@ from .processing.llm_detector import LLMFinderProcessor
 from .processing.llm_verifier import LLMJudgeProcessor
 from .processing.arbitration_engine import ArbitrationProcessor
 from .processing.quality_validator import ValidationProcessor
+from .processing.llm_final_reviewer import LLMFinalReviewer
+from .processing.allowlist import Allowlist, DEFAULT_ALLOWLIST_PATH
 from config.llm_config import LLMConfigManager
 
 logger = logging.getLogger(__name__)
@@ -37,6 +39,7 @@ class ParallelProcessingResult:
     processing_stats: Dict[str, Any]
     audit_trail: Dict[str, Any]
     parallel_stats: Dict[str, Any]
+    final_review: Optional[Dict[str, Any]] = None
 
 @dataclass
 class ProcessingConfig:
@@ -51,28 +54,36 @@ class ProcessingConfig:
 class ParallelPIIProcessingPipeline:
     """Enhanced PII processing pipeline with parallel execution capabilities"""
     
-    def __init__(self, policy_path: Optional[str] = None, use_real_api: bool = False, 
-                 config: Optional[ProcessingConfig] = None):
+    def __init__(self, policy_path: Optional[str] = None, use_real_api: bool = False,
+                 config: Optional[ProcessingConfig] = None, enable_final_review: bool = True,
+                 allowlist_path: Optional[str] = DEFAULT_ALLOWLIST_PATH):
         """Initialize the parallel processing pipeline"""
-        
+
         # Load policy
         if policy_path:
             self.policy = PIIPolicy.from_json(policy_path)
         else:
             self.policy = PIIPolicy()
             self.policy.load_default_policies()
-        
+
         # Initialize LLM configuration
         self.config_manager = LLMConfigManager()
         if use_real_api:
             self.config_manager.config.enable_real_api = True
-        
+
+        # Load allowlist (None disables it, missing file silently no-ops)
+        self.allowlist = Allowlist.from_file(allowlist_path) if allowlist_path else Allowlist.empty()
+
         # Initialize processing components
         self.deterministic_extractor = DeterministicExtractor(self.policy)
         self.llm_detector = LLMFinderProcessor(self.policy)
         self.llm_verifier = LLMJudgeProcessor(self.policy, self.config_manager)
-        self.arbitration_engine = ArbitrationProcessor(self.policy)
+        self.arbitration_engine = ArbitrationProcessor(self.policy, allowlist=self.allowlist)
         self.quality_validator = ValidationProcessor(self.policy)
+        self.final_reviewer = LLMFinalReviewer(
+            self.config_manager,
+            enabled=enable_final_review and use_real_api,
+        )
         
         # Parallel processing configuration
         self.config = config or ProcessingConfig()
@@ -137,7 +148,11 @@ class ParallelPIIProcessingPipeline:
             
             # Wait for both to complete
             validation_result, result_data = await asyncio.gather(validation_task, result_prep_task)
-            
+
+            # Step 6: LLM Final Review (only when real APIs enabled; cheap no-op otherwise)
+            logger.info("Step 6: LLM Final Review")
+            final_review_result = await self.final_reviewer.review(validation_result.processed_text)
+
             # Calculate parallel processing statistics
             end_time = time.time()
             parallel_stats = self._calculate_parallel_stats(start_time, end_time, {
@@ -167,7 +182,8 @@ class ParallelPIIProcessingPipeline:
                 pseudonym_map=arbitration_result.pseudonym_map,
                 processing_stats=result_data['processing_stats'],
                 audit_trail=result_data['audit_trail'],
-                parallel_stats=parallel_stats
+                parallel_stats=parallel_stats,
+                final_review=final_review_result.to_dict()
             )
             
             # Save results if output directory specified

@@ -1,0 +1,17 @@
+{
+  "_description": "Strings that should NOT be redacted even if detected as PII. Use this to preserve operationally useful tokens like internal hostnames, region codes, or service identifiers. 'literals' is matched case-insensitively as exact strings. 'regex_patterns' uses Python re.search semantics. WARNING: do not allowlist anything that could be PII (emails, SSNs, names) — this list overrides redaction.",
+  "literals": [
+    "us-east-1",
+    "us-east-2",
+    "us-west-1",
+    "us-west-2",
+    "eu-west-1",
+    "eu-central-1",
+    "ap-southeast-1",
+    "ap-northeast-1"
+  ],
+  "regex_patterns": [
+    "^kafka-broker-\\d+(\\.[a-z0-9-]+)*$",
+    "^redis-cache-\\d+(\\.[a-z0-9-]+)*$"
+  ]
+}

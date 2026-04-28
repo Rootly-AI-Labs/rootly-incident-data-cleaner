@@ -27,15 +27,55 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class PIIRedactionPipeline:
-    """Main PII redaction pipeline orchestrator for Rootly incident data"""
-    
-    def __init__(self, policy_path: Optional[str] = None, use_real_api: bool = False):
-        """Initialize the pipeline with optional custom policy"""
-        
+    """Main PII redaction pipeline orchestrator for incident data"""
+
+    def __init__(self, policy_path: Optional[str] = None, use_real_api: bool = False,
+                 enable_final_review: bool = True, allowlist_path: Optional[str] = None):
+        """Initialize the pipeline with optional custom policy.
+
+        allowlist_path:
+          - None (default): use the bundled config/allowlist.json
+          - explicit path: load from that file
+          - "" (empty string): disable the allowlist entirely
+        """
+
+        # Resolve allowlist: preserve None as default; explicit empty string means disabled.
+        if allowlist_path is None:
+            from src.processing.allowlist import DEFAULT_ALLOWLIST_PATH
+            resolved_allowlist = DEFAULT_ALLOWLIST_PATH
+        elif allowlist_path == "":
+            resolved_allowlist = None
+        else:
+            resolved_allowlist = allowlist_path
+
         # Initialize the processing pipeline
-        self.processing_pipeline = PIIProcessingPipeline(policy_path, use_real_api)
-        
+        self.processing_pipeline = PIIProcessingPipeline(
+            policy_path, use_real_api,
+            enable_final_review=enable_final_review,
+            allowlist_path=resolved_allowlist,
+        )
+
         logger.info("PII Redaction Pipeline initialized")
+
+    async def process_text(self, text: str, output_dir: Optional[str] = None) -> Dict[str, Any]:
+        """Process raw text through the underlying pipeline.
+
+        Returns a plain dict so callers (e.g. process_incidents.py) can index
+        fields without depending on the ProcessingResult dataclass shape.
+        """
+        result = await self.processing_pipeline.process_text(text, output_dir)
+        return {
+            'original_text': result.original_text,
+            'processed_text': result.processed_text,
+            'quality_metrics': result.quality_metrics,
+            'validation_issues': result.validation_issues,
+            'critical_issues': result.critical_issues,
+            'high_issues': result.high_issues,
+            'recommendations': result.recommendations,
+            'pseudonym_map': result.pseudonym_map,
+            'processing_stats': result.processing_stats,
+            'final_review': result.final_review,
+        }
     
     async def process_jsonl_file(self, input_file: str, output_dir: Optional[str] = None) -> Dict[str, Any]:
         """Process a JSONL file containing Rootly incident data"""

@@ -21,6 +21,8 @@ sys.path.append(str(Path(__file__).parent.parent))
 from main import PIIRedactionPipeline
 from src.parallel_processing_pipeline import ParallelPIIProcessingPipeline, ProcessingConfig
 
+DEFAULT_CONFIDENCE_THRESHOLD = 0.7
+
 def load_incident_data(file_path: str) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
     """Load incident data from JSON or JSONL file"""
     
@@ -115,9 +117,60 @@ def extract_text_from_incident(incident: Dict[str, Any]) -> str:
     
     return "\n".join(text_parts)
 
-def generate_detailed_report(results: Dict[str, Any], incident_id: str, output_dir: Path):
+def assess_human_review(results: Dict[str, Any], threshold: float) -> Dict[str, Any]:
+    """Decide whether an incident's redaction output should be reviewed by a human.
+
+    Combines two signals: the quality validator's score (and sub-metrics), and
+    the LLM final-review verdict. Either source can flag an incident.
+    """
+    metrics = results.get('quality_metrics', {}) or {}
+    quality_score = float(metrics.get('overall_quality_score', 0.0))
+
+    low_confidence_signals = []
+    for key in ('overall_quality_score', 'precision', 'recall', 'f1_score'):
+        if key in metrics:
+            value = float(metrics[key])
+            if value < threshold:
+                low_confidence_signals.append({'metric': key, 'value': value})
+
+    metrics_flag = quality_score < threshold or bool(low_confidence_signals)
+
+    final_review = results.get('final_review') or {}
+    final_review_skipped = bool(final_review.get('skipped'))
+    final_review_flag = (
+        not final_review_skipped
+        and final_review
+        and not bool(final_review.get('is_clean', True))
+    )
+
+    needs_review = metrics_flag or bool(final_review_flag)
+
+    reasons = []
+    if metrics_flag:
+        reasons.append(f"quality score {quality_score:.3f} below threshold {threshold:.2f}")
+    if final_review_flag:
+        n_issues = len(final_review.get('issues') or [])
+        reasons.append(f"LLM final review flagged {n_issues} issue(s)")
+    if not reasons:
+        reasons.append(f"quality score {quality_score:.3f} meets threshold {threshold:.2f}")
+
+    return {
+        'needs_review': needs_review,
+        'confidence_threshold': threshold,
+        'quality_score': quality_score,
+        'low_confidence_signals': low_confidence_signals,
+        'final_review_flag': bool(final_review_flag),
+        'final_review_skipped': final_review_skipped,
+        'reason': '; '.join(reasons),
+    }
+
+
+def generate_detailed_report(results: Dict[str, Any], incident_id: str, output_dir: Path,
+                             confidence_threshold: float = DEFAULT_CONFIDENCE_THRESHOLD):
     """Generate detailed redaction report"""
-    
+
+    review = assess_human_review(results, confidence_threshold)
+
     report = {
         "incident_id": incident_id,
         "processing_timestamp": datetime.now().isoformat(),
@@ -128,6 +181,8 @@ def generate_detailed_report(results: Dict[str, Any], incident_id: str, output_d
             "total_decisions": len(results.get('arbitration_decisions', [])),
             "quality_score": results['quality_metrics']['overall_quality_score']
         },
+        "human_review": review,
+        "final_review": results.get('final_review'),
         "quality_metrics": results['quality_metrics'],
         "processing_stats": results['processing_stats'],
         "text_comparison": {
@@ -193,8 +248,12 @@ def print_processing_summary(results: Dict[str, Any], incident_id: str):
     print(f"\nPROCESSED:")
     print(f"  {results['processed_text'][:500]}...")
 
-async def process_incidents(file_path: str, output_dir: Optional[str] = None, llm_simulation: bool = False, 
-                           policy_path: Optional[str] = None, max_concurrent: int = 5, enable_parallel: bool = True):
+async def process_incidents(file_path: str, output_dir: Optional[str] = None, llm_simulation: bool = False,
+                           policy_path: Optional[str] = None, max_concurrent: int = 5, enable_parallel: bool = True,
+                           confidence_threshold: float = DEFAULT_CONFIDENCE_THRESHOLD,
+                           skip_final_review: bool = False,
+                           allowlist_path: Optional[str] = None,
+                           no_allowlist: bool = False):
     """Process incidents from any platform using automatic incident ID detection"""
     
     # Load incidents
@@ -215,7 +274,18 @@ async def process_incidents(file_path: str, output_dir: Optional[str] = None, ll
     print("🚀 Initializing PII Redaction Pipeline...")
     if llm_simulation:
         print("💡 LLM simulation mode enabled - no API calls will be made")
-    
+
+    # Resolve allowlist source: explicit path > default file > disabled.
+    if no_allowlist:
+        resolved_allowlist_path = None
+        print("🛡️  Allowlist disabled (--no-allowlist)")
+    elif allowlist_path:
+        resolved_allowlist_path = allowlist_path
+        print(f"🛡️  Allowlist: {allowlist_path}")
+    else:
+        from src.processing.allowlist import DEFAULT_ALLOWLIST_PATH
+        resolved_allowlist_path = DEFAULT_ALLOWLIST_PATH
+
     if enable_parallel:
         print(f"⚡ Parallel processing enabled with max {max_concurrent} concurrent incidents")
         # Configure parallel processing
@@ -226,9 +296,11 @@ async def process_incidents(file_path: str, output_dir: Optional[str] = None, ll
             enable_validation_parallel=True
         )
         pipeline = ParallelPIIProcessingPipeline(
-            policy_path=policy_path, 
+            policy_path=policy_path,
             use_real_api=not llm_simulation,
-            config=config
+            config=config,
+            enable_final_review=not skip_final_review,
+            allowlist_path=resolved_allowlist_path,
         )
         
         # Process incidents in parallel
@@ -247,7 +319,7 @@ async def process_incidents(file_path: str, output_dir: Optional[str] = None, ll
         all_results = []
         for i, result in enumerate(results):
             incident_id = f"incident_{i+1}"  # Simplified ID for parallel processing
-            report_file = generate_detailed_report({
+            result_dict = {
                 'original_text': result.original_text,
                 'processed_text': result.processed_text,
                 'quality_metrics': result.quality_metrics,
@@ -256,29 +328,27 @@ async def process_incidents(file_path: str, output_dir: Optional[str] = None, ll
                 'high_issues': result.high_issues,
                 'recommendations': result.recommendations,
                 'pseudonym_map': result.pseudonym_map,
-                'processing_stats': result.processing_stats
-            }, incident_id, output_dir)
-            
+                'processing_stats': result.processing_stats,
+                'final_review': getattr(result, 'final_review', None),
+            }
+            report_file = generate_detailed_report(result_dict, incident_id, output_dir, confidence_threshold)
+
             all_results.append({
                 'incident_id': incident_id,
                 'incident_index': i + 1,
-                'results': {
-                    'original_text': result.original_text,
-                    'processed_text': result.processed_text,
-                    'quality_metrics': result.quality_metrics,
-                    'validation_issues': result.validation_issues,
-                    'critical_issues': result.critical_issues,
-                    'high_issues': result.high_issues,
-                    'recommendations': result.recommendations,
-                    'pseudonym_map': result.pseudonym_map,
-                    'processing_stats': result.processing_stats
-                },
+                'results': result_dict,
                 'report_file': str(report_file)
             })
         
     else:
         # Use original sequential processing
-        pipeline = PIIRedactionPipeline(policy_path=policy_path, use_real_api=not llm_simulation)
+        # main.PIIRedactionPipeline treats None as "use default", "" as disabled.
+        pipeline = PIIRedactionPipeline(
+            policy_path=policy_path,
+            use_real_api=not llm_simulation,
+            enable_final_review=not skip_final_review,
+            allowlist_path="" if resolved_allowlist_path is None else resolved_allowlist_path,
+        )
         
         # Process each incident sequentially
         all_results = []
@@ -298,7 +368,7 @@ async def process_incidents(file_path: str, output_dir: Optional[str] = None, ll
                 results = await pipeline.process_text(text_to_process, str(incident_output_dir))
                 
                 # Generate detailed report
-                report_file = generate_detailed_report(results, incident_id, output_dir)
+                report_file = generate_detailed_report(results, incident_id, output_dir, confidence_threshold)
                 
                 # Print summary
                 print_processing_summary(results, incident_id)
@@ -317,13 +387,26 @@ async def process_incidents(file_path: str, output_dir: Optional[str] = None, ll
     
     # Generate overall summary
     if all_results:
-        generate_overall_summary(all_results, output_dir, file_path)
+        generate_overall_summary(all_results, output_dir, file_path, confidence_threshold)
         print(f"\n✅ Processing complete! Reports saved to: {output_dir}")
         print(f"📊 Processed {len(all_results)} incidents successfully")
 
-def generate_overall_summary(all_results: List[Dict], output_dir: Path, source_file: str):
+def generate_overall_summary(all_results: List[Dict], output_dir: Path, source_file: str,
+                             confidence_threshold: float = DEFAULT_CONFIDENCE_THRESHOLD):
     """Generate overall summary report"""
-    
+
+    review_assessments = [
+        (r, assess_human_review(r['results'], confidence_threshold))
+        for r in all_results
+    ]
+    needing_review = [r['incident_id'] for r, review in review_assessments if review['needs_review']]
+    final_reviewed = [r for r in all_results if (r['results'].get('final_review') or {}).get('skipped') is False]
+    final_review_flagged = [
+        r['incident_id'] for r in all_results
+        if (r['results'].get('final_review') or {}).get('skipped') is False
+        and not (r['results'].get('final_review') or {}).get('is_clean', True)
+    ]
+
     summary = {
         "processing_timestamp": datetime.now().isoformat(),
         "source_file": str(source_file),
@@ -336,10 +419,20 @@ def generate_overall_summary(all_results: List[Dict], output_dir: Path, source_f
             "total_validation_issues": sum(r['results']['validation_issues'] for r in all_results),
             "total_critical_issues": sum(r['results']['critical_issues'] for r in all_results)
         },
+        "human_review": {
+            "confidence_threshold": confidence_threshold,
+            "incidents_needing_review_count": len(needing_review),
+            "incidents_needing_review": needing_review,
+        },
+        "final_review_summary": {
+            "incidents_reviewed_by_llm": len(final_reviewed),
+            "incidents_flagged_by_llm": len(final_review_flagged),
+            "flagged_incident_ids": final_review_flagged,
+        },
         "incident_summaries": []
     }
-    
-    for result in all_results:
+
+    for result, review in review_assessments:
         incident_summary = {
             "incident_id": result['incident_id'],
             "quality_score": result['results']['quality_metrics']['overall_quality_score'],
@@ -347,6 +440,7 @@ def generate_overall_summary(all_results: List[Dict], output_dir: Path, source_f
             "pseudonyms_count": len(result['results']['pseudonym_map']),
             "validation_issues": result['results']['validation_issues'],
             "critical_issues": result['results']['critical_issues'],
+            "needs_human_review": review['needs_review'],
             "report_file": result['report_file']
         }
         summary["incident_summaries"].append(incident_summary)
@@ -367,6 +461,20 @@ def generate_overall_summary(all_results: List[Dict], output_dir: Path, source_f
     print(f"🔄 Total Pseudonyms Generated: {summary['overall_statistics']['total_pseudonyms_generated']}")
     print(f"⚠️  Total Validation Issues: {summary['overall_statistics']['total_validation_issues']}")
     print(f"🚨 Total Critical Issues: {summary['overall_statistics']['total_critical_issues']}")
+    review_count = summary['human_review']['incidents_needing_review_count']
+    if review_count:
+        threshold = summary['human_review']['confidence_threshold']
+        print(f"👀 Needs Human Review: {review_count} incident(s) below confidence threshold {threshold:.2f}")
+        for incident_id in summary['human_review']['incidents_needing_review']:
+            print(f"     - {incident_id}")
+    else:
+        print(f"👀 Needs Human Review: 0 (all incidents above confidence threshold {summary['human_review']['confidence_threshold']:.2f})")
+
+    final = summary['final_review_summary']
+    if final['incidents_reviewed_by_llm']:
+        print(f"🔎 LLM Final Review: {final['incidents_flagged_by_llm']}/{final['incidents_reviewed_by_llm']} incident(s) flagged for residual or contextual PII")
+    else:
+        print("🔎 LLM Final Review: skipped (simulation mode, missing API key, or --skip-final-review)")
     print(f"\n📁 Detailed reports saved to: {output_dir}")
 
 def main():
@@ -404,7 +512,17 @@ Automatic incident ID detection:
                        help="Maximum number of concurrent incidents to process (default: 5)")
     parser.add_argument("--disable-parallel", action="store_true",
                        help="Disable parallel processing and use sequential mode")
-    
+    parser.add_argument("--confidence-threshold", "-t", type=float, default=DEFAULT_CONFIDENCE_THRESHOLD,
+                       help=f"Quality score below which an incident is flagged for human review "
+                            f"(default: {DEFAULT_CONFIDENCE_THRESHOLD})")
+    parser.add_argument("--skip-final-review", action="store_true",
+                       help="Skip the LLM-based final review pass (saves one LLM call per incident, "
+                            "but loses the catch-net for contextual re-identification)")
+    parser.add_argument("--allowlist", type=str, default=None,
+                       help="Path to a JSON allowlist of strings to preserve (default: config/allowlist.json)")
+    parser.add_argument("--no-allowlist", action="store_true",
+                       help="Disable the allowlist entirely (every detection goes through redaction)")
+
     args = parser.parse_args()
     
     # Configure logging
@@ -414,12 +532,16 @@ Automatic incident ID detection:
     )
     
     asyncio.run(process_incidents(
-        args.file_path, 
-        args.output_dir, 
-        args.llm_simulation, 
+        args.file_path,
+        args.output_dir,
+        args.llm_simulation,
         args.policy,
         args.max_concurrent,
-        not args.disable_parallel
+        not args.disable_parallel,
+        args.confidence_threshold,
+        args.skip_final_review,
+        args.allowlist,
+        args.no_allowlist,
     ))
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ from dataclasses import dataclass, asdict
 from datetime import datetime
 
 from ..policies.policy_manager import PIIPolicy, RedactionAction, DataCategory
+from .allowlist import Allowlist
 from .deterministic_extractor import DeterministicOutput, DeterministicResult
 from .llm_detector import LLMFinderResult, LLMDetection
 from .llm_verifier import JudgeResult, JudgeDecision
@@ -273,17 +274,18 @@ class TextProcessor:
 
 class ArbitrationProcessor:
     """Main processor for Stage 6: Arbitration & Redaction"""
-    
-    def __init__(self, policy: PIIPolicy):
+
+    def __init__(self, policy: PIIPolicy, allowlist: Optional[Allowlist] = None):
         self.policy = policy
         self.conflict_resolver = ConflictResolver(policy)
         self.text_processor = TextProcessor()
-        
+        self.allowlist = allowlist or Allowlist.empty()
+
         # Combined results from all stages
         self.all_detections: List[DeterministicResult] = []
         self.all_llm_detections: List[LLMDetection] = []
         self.all_judgements: List[JudgeDecision] = []
-        
+
         # Processing statistics
         self.stats = {
             'total_entities_processed': 0,
@@ -292,7 +294,8 @@ class ArbitrationProcessor:
             'context_adjustments': 0,
             'redactions_applied': 0,
             'pseudonymizations_applied': 0,
-            'retentions_applied': 0
+            'retentions_applied': 0,
+            'allowlist_overrides': 0,
         }
     
     def arbitrate_and_redact(self, deterministic_output: DeterministicOutput, 
@@ -444,7 +447,15 @@ class ArbitrationProcessor:
             final_action, reasoning = self.conflict_resolver.resolve_conflict(
                 entity_type, stage_decisions, context_text, original_text
             )
-            
+
+            # Allowlist override: preserve operationally meaningful tokens
+            # (region codes, internal hostnames, etc.) even if detected as PII.
+            allowlist_match = self.allowlist.match(original_text)
+            if allowlist_match and final_action != RedactionAction.RETAIN:
+                reasoning = f"Allowlist override (matched {allowlist_match!r}): {reasoning}"
+                final_action = RedactionAction.RETAIN
+                self.stats['allowlist_overrides'] += 1
+
             # Generate replacement text
             replacement_text, pseudonym_key = self.text_processor.generate_replacement_text(
                 entity_type, original_text, final_action, "document"

@@ -13,6 +13,8 @@ from .processing.llm_detector import LLMFinderProcessor
 from .processing.llm_verifier import LLMJudgeProcessor
 from .processing.arbitration_engine import ArbitrationProcessor
 from .processing.quality_validator import ValidationProcessor
+from .processing.llm_final_reviewer import LLMFinalReviewer
+from .processing.allowlist import Allowlist, DEFAULT_ALLOWLIST_PATH
 from config.llm_config import LLMConfigManager
 
 logger = logging.getLogger(__name__)
@@ -30,32 +32,45 @@ class ProcessingResult:
     pseudonym_map: Dict[str, str]
     processing_stats: Dict[str, Any]
     audit_trail: Dict[str, Any]
+    final_review: Optional[Dict[str, Any]] = None
 
 class PIIProcessingPipeline:
     """Professional PII processing pipeline orchestrator"""
     
-    def __init__(self, policy_path: Optional[str] = None, use_real_api: bool = False):
+    def __init__(self, policy_path: Optional[str] = None, use_real_api: bool = False,
+                 enable_final_review: bool = True,
+                 allowlist_path: Optional[str] = DEFAULT_ALLOWLIST_PATH):
         """Initialize the processing pipeline with optional custom policy"""
-        
+
         # Load policy
         if policy_path:
             self.policy = PIIPolicy.from_json(policy_path)
         else:
             self.policy = PIIPolicy()
             self.policy.load_default_policies()
-        
+
         # Initialize LLM configuration
         self.config_manager = LLMConfigManager()
         if use_real_api:
             self.config_manager.config.enable_real_api = True
-        
+
+        # Load allowlist (None disables it, missing file silently no-ops)
+        self.allowlist = Allowlist.from_file(allowlist_path) if allowlist_path else Allowlist.empty()
+
         # Initialize processing components
         self.deterministic_extractor = DeterministicExtractor(self.policy)
         self.llm_detector = LLMFinderProcessor(self.policy)
         self.llm_verifier = LLMJudgeProcessor(self.policy, self.config_manager)
-        self.arbitration_engine = ArbitrationProcessor(self.policy)
+        self.arbitration_engine = ArbitrationProcessor(self.policy, allowlist=self.allowlist)
         self.quality_validator = ValidationProcessor(self.policy)
-        
+        # Final LLM review only runs when real APIs are enabled — it is the
+        # most expensive stage and exists to catch contextual leakage that
+        # pattern-based validation cannot.
+        self.final_reviewer = LLMFinalReviewer(
+            self.config_manager,
+            enabled=enable_final_review and use_real_api,
+        )
+
         logger.info("PII Processing Pipeline initialized")
     
     async def process_text(self, text: str, output_dir: Optional[str] = None) -> ProcessingResult:
@@ -84,7 +99,11 @@ class PIIProcessingPipeline:
         # Step 5: Quality Validation
         logger.info("Step 5: Quality Validation")
         validation_result = self.quality_validator.validate_and_post_check(arbitration_result)
-        
+
+        # Step 6: LLM Final Review (only when real APIs enabled)
+        logger.info("Step 6: LLM Final Review")
+        final_review_result = await self.final_reviewer.review(validation_result.processed_text)
+
         # Prepare comprehensive results
         result = ProcessingResult(
             original_text=text,
@@ -115,7 +134,8 @@ class PIIProcessingPipeline:
                 'llm_verification_result': llm_verification_result,
                 'arbitration_result': arbitration_result,
                 'validation_result': validation_result
-            }
+            },
+            final_review=final_review_result.to_dict()
         )
         
         # Save results if output directory specified
