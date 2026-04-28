@@ -6,10 +6,7 @@ This directory contains realistic sample incident data for all supported platfor
 
 | Platform | File | Sample Count | Key Features |
 |----------|------|-------------|--------------|
-| **** | `_samples.jsonl` | 10 samples | Cleanest schema, timeline events, post-mortems |
-| **** | `_samples.jsonl` | 10 samples | Retrospectives, tasks, follow-ups |
 | **Rootly** | `rootly_samples.jsonl` | 6 samples | REST + GraphQL schema, learned lessons |
-| **** | `_samples.jsonl` | 5 samples | Detailed analysis, action items |
 | **PagerDuty** | `pagerduty_samples.jsonl` | 3 samples | Notes, log entries, alerts |
 | **BigPanda** | `bigpanda_samples.jsonl` | 5 samples | Correlation events, alerts |
 
@@ -59,11 +56,11 @@ Each platform sample includes:
 
 ### Testing Individual Platforms
 ```bash
-# Test with  samples
-cat data/test_samples/_samples.jsonl | jq '.description' | head
+# Inspect descriptions
+cat data/test_samples/rootly_samples.jsonl | jq '.description' | head
 
 # Check PII detection accuracy
-python src/core/pii_detector.py --input data/test_samples/_samples.jsonl
+python src/core/pii_detector.py --input data/test_samples/rootly_samples.jsonl
 ```
 
 ### Cross-Platform Comparison
@@ -80,7 +77,7 @@ python -m src.pipeline.main --input-dir data/test_samples --platform all
 
 ## Data Structure Examples
 
-###  Sample Structure
+### Sample Incident Structure
 ```json
 {
   "id": "inc_01j8x7b9k9n1q2w3e4r5t6y7u8i9o0p",
@@ -91,17 +88,6 @@ python -m src.pipeline.main --input-dir data/test_samples --platform all
     "email": "mike.rodriguez@techcorp.com"
   },
   "timeline_events": [...]
-}
-```
-
-###  Sample Structure  
-```json
-{
-  "id": "7b2c3d4e-5f6g-7h8i-9j0k-1l2m3n4o5p3q",
-  "summary": "Kubernetes Pod Crash Loop", 
-  "assignee": {"name": "Rachel Kim", "email": "rachel.kim@.com"},
-  "incidentCommander": {"name": "Rachel Kim", "email": "rachel.kim@.com"},
-  "timelineEvents": [...]
 }
 ```
 
@@ -138,7 +124,7 @@ These samples contain various PII detection challenges:
 python -c "
 from src.core.pii_detector import PIIDetector
 detector = PIIDetector()
-with open('data/test_samples/_samples.jsonl') as f:
+with open('data/test_samples/rootly_samples.jsonl') as f:
     line = f.readline()
     results = detector.detect_pii(line)
     for r in results:

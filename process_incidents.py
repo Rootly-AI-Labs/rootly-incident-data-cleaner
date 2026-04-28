@@ -378,8 +378,8 @@ def main():
         epilog="""
 Examples:
   python process_incidents.py data/test_samples/rootly_samples.jsonl
-  python process_incidents.py data/test_samples/_samples.jsonl --llm-simulation
-  python process_incidents.py data/test_samples/_samples.jsonl --output-dir output/custom_results
+  python process_incidents.py data/test_samples/rootly_samples.jsonl --llm-simulation
+  python process_incidents.py data/test_samples/rootly_samples_extended.jsonl --output-dir output/custom_results
   python process_incidents.py incidents.json --llm-simulation --log-level DEBUG
 
 Supported formats:
