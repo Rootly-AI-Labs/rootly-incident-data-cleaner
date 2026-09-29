@@ -82,20 +82,25 @@ class TestPIIRedactionPipeline:
         })
     
     async def test_validation_issues(self):
-        """Test validation issue detection"""
+        """Test fallback redaction of sensitive numeric identifiers"""
         
         # Text with explicit PII that should be detected as residual
-        test_text = "SSN: 123-45-6789, Credit Card: 4532-1234-5678-9012"
+        test_text = "SSN: 123-45-6789, Credit Card: 4532-1234-5678-9012, token=abc123xyz"
         
         result = await self.pipeline.process_text(test_text)
         
-        # Should detect validation issues
-        assert result['validation_issues'] > 0
+        assert "123-45-6789" not in result['processed_text']
+        assert "4532-1234-5678-9012" not in result['processed_text']
+        assert "[REDACTED_SSN]" in result['processed_text']
+        assert "[REDACTED_CARD]" in result['processed_text']
+        assert "token=abc123xyz" not in result['processed_text']
+        assert "[REDACTED_KEY]" in result['processed_text']
+        assert result['quality_metrics']['residual_pii_count'] == 0
         
         self.test_results.append({
             'test': 'validation_issues',
             'status': 'PASS',
-            'message': 'Validation issue detection working'
+            'message': 'SSN and card fallback redaction working'
         })
     
     async def test_file_output(self):
@@ -108,15 +113,15 @@ class TestPIIRedactionPipeline:
             
             # Check that files were created
             output_path = Path(temp_dir)
-            assert (output_path / "redaction_results.json").exists()
-            assert (output_path / "stage3_deterministic.json").exists()
-            assert (output_path / "stage4_finder.json").exists()
-            assert (output_path / "stage5_judge.json").exists()
-            assert (output_path / "stage6_arbitration.json").exists()
-            assert (output_path / "stage7_validation.json").exists()
+            assert (output_path / "processing_results.json").exists()
+            assert (output_path / "deterministic_extraction.json").exists()
+            assert (output_path / "llm_detection.json").exists()
+            assert (output_path / "llm_verification.json").exists()
+            assert (output_path / "arbitration.json").exists()
+            assert (output_path / "quality_validation.json").exists()
             
             # Verify JSON files are valid
-            with open(output_path / "redaction_results.json") as f:
+            with open(output_path / "processing_results.json") as f:
                 json.load(f)  # Should not raise exception
         
         self.test_results.append({

@@ -105,7 +105,10 @@ class TestPIIRedactionPipeline:
         assert processing_time < 10.0  # Should complete within 10 seconds
         
         # Verify each result has expected structure
-        for result in results:
+        for outcome in results:
+            assert hasattr(outcome, 'incident_id')
+            assert outcome.result is not None
+            result = outcome.result
             assert hasattr(result, 'original_text')
             assert hasattr(result, 'processed_text')
             assert hasattr(result, 'quality_metrics')
@@ -149,7 +152,7 @@ class TestPIIRedactionPipeline:
         })
     
     async def test_large_text_chunking(self):
-        """Test processing of large text with chunking"""
+        """A long incident must retain full context around an identifier."""
         
         # Create large text
         base_text = "Contact john.doe@example.com at (555) 123-4567. "
@@ -162,18 +165,18 @@ class TestPIIRedactionPipeline:
         # Process large text
         result = await chunking_pipeline.process_text(large_text)
         
-        # Verify chunking occurred
-        assert result.parallel_stats.get('chunk_processing_mode', False)
-        assert 'chunks_processed' in result.parallel_stats
-        
-        # Verify all PII was processed
+        # Verify all PII was processed, including tokens that would cross a
+        # fixed character boundary in the old chunked implementation.
+        assert not result.parallel_stats.get('chunk_processing_mode', False)
+        assert result.original_text == large_text
         assert "[REDACTED_EMAIL]" in result.processed_text
         assert "[REDACTED_PHONE]" in result.processed_text
+        assert "john.doe@example.com" not in result.processed_text
         
         self.test_results.append({
             'test': 'large_text_chunking',
             'status': 'PASS',
-            'message': f'Processed {result.parallel_stats["chunks_processed"]} chunks successfully'
+            'message': 'Processed the complete incident without splitting identifiers'
         })
     
     async def test_concurrency_limits(self):
@@ -200,6 +203,7 @@ class TestPIIRedactionPipeline:
         
         # Verify all incidents were processed
         assert len(results) == len(test_incidents)
+        assert all(outcome.result is not None for outcome in results)
         
         # Verify processing took reasonable time (not too fast, indicating concurrency was limited)
         processing_time = end_time - start_time
@@ -232,7 +236,8 @@ class TestPIIRedactionPipeline:
         results = await self.parallel_pipeline.process_multiple_incidents(test_incidents)
         
         # Verify valid incidents were processed despite potential errors
-        assert len(results) >= 0  # Should handle errors gracefully
+        assert len(results) == len(test_incidents)
+        assert all(outcome.result is not None for outcome in results)
         
         self.test_results.append({
             'test': 'error_handling_in_parallel',

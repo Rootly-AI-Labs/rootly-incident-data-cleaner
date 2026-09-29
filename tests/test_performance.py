@@ -81,7 +81,8 @@ class LoadTestSuite:
         end_time = time.time()
         
         processing_time = end_time - start_time
-        throughput = len(results) / processing_time if processing_time > 0 else 0
+        successful_results = [outcome for outcome in results if outcome.result is not None]
+        throughput = len(successful_results) / processing_time if processing_time > 0 else 0
         
         result = {
             'test_type': 'concurrent_load',
@@ -89,13 +90,13 @@ class LoadTestSuite:
             'max_concurrent': max_concurrent,
             'processing_time': processing_time,
             'throughput': throughput,
-            'successful_results': len(results),
-            'success_rate': len(results) / incident_count if incident_count > 0 else 0
+            'successful_results': len(successful_results),
+            'success_rate': len(successful_results) / incident_count if incident_count > 0 else 0
         }
         
         self.results.append(result)
         
-        print(f"  ✅ Processed {len(results)}/{incident_count} incidents in {processing_time:.2f}s")
+        print(f"  ✅ Processed {len(successful_results)}/{incident_count} incidents in {processing_time:.2f}s")
         print(f"  📊 Throughput: {throughput:.2f} incidents/second")
         
         return result
@@ -201,19 +202,20 @@ class LoadTestSuite:
         end_time = time.time()
         
         processing_time = end_time - start_time
-        success_rate = len(results) / len(incidents)
+        successful_results = [outcome for outcome in results if outcome.result is not None]
+        success_rate = len(successful_results) / len(incidents)
         
         result = {
             'test_type': 'error_recovery',
             'total_incidents': len(incidents),
-            'successful_results': len(results),
+            'successful_results': len(successful_results),
             'success_rate': success_rate,
             'processing_time': processing_time
         }
         
         self.results.append(result)
         
-        print(f"  ✅ Processed {len(results)}/{len(incidents)} incidents")
+        print(f"  ✅ Processed {len(successful_results)}/{len(incidents)} incidents")
         print(f"  📊 Success rate: {success_rate:.2%}")
         
         return result

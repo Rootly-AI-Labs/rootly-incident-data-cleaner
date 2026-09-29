@@ -3,6 +3,7 @@ PII Processing Pipeline
 Professional orchestrator for PII detection, redaction, and validation
 """
 
+import copy
 import logging
 from typing import Optional, Dict, Any
 from dataclasses import dataclass
@@ -18,6 +19,8 @@ from .processing.allowlist import Allowlist, DEFAULT_ALLOWLIST_PATH
 from config.llm_config import LLMConfigManager
 
 logger = logging.getLogger(__name__)
+
+OUTPUT_SCHEMA_VERSION = "1.1"
 
 @dataclass
 class ProcessingResult:
@@ -75,6 +78,17 @@ class PIIProcessingPipeline:
     
     async def process_text(self, text: str, output_dir: Optional[str] = None) -> ProcessingResult:
         """Process text through the complete PII processing pipeline"""
+
+        processor = copy.copy(self)
+        processor.deterministic_extractor = DeterministicExtractor(self.policy)
+        processor.llm_detector = LLMFinderProcessor(self.policy)
+        processor.llm_verifier = LLMJudgeProcessor(self.policy, self.config_manager)
+        processor.arbitration_engine = ArbitrationProcessor(self.policy, allowlist=self.allowlist)
+        processor.quality_validator = ValidationProcessor(self.policy)
+        return await processor._process_text_once(text, output_dir)
+
+    async def _process_text_once(self, text: str, output_dir: Optional[str] = None) -> ProcessingResult:
+        """Run one incident with private detection and arbitration state."""
         
         logger.info("Starting PII processing pipeline")
         
@@ -126,7 +140,7 @@ class PIIProcessingPipeline:
                 'llm_detections': len(llm_detection_result.detected_spans),
                 'llm_verifications': len(llm_verification_result.judge_decisions),
                 'arbitration_decisions': len(arbitration_result.arbitration_decisions),
-                'text_reduction_percentage': ((len(text) - len(validation_result.processed_text)) / len(text)) * 100
+                'text_reduction_percentage': ((len(text) - len(validation_result.processed_text)) / len(text)) * 100 if text else 0.0
             },
             audit_trail={
                 'deterministic_result': deterministic_result,
@@ -157,6 +171,7 @@ class PIIProcessingPipeline:
         # Save main results
         with open(output_path / "processing_results.json", "w") as f:
             json.dump({
+                'schema_version': OUTPUT_SCHEMA_VERSION,
                 'original_text': result.original_text,
                 'processed_text': result.processed_text,
                 'quality_metrics': result.quality_metrics,
@@ -165,7 +180,8 @@ class PIIProcessingPipeline:
                 'high_issues': result.high_issues,
                 'recommendations': result.recommendations,
                 'pseudonym_map': result.pseudonym_map,
-                'processing_stats': result.processing_stats
+                'processing_stats': result.processing_stats,
+                'final_review': result.final_review,
             }, f, indent=2)
         
         # Save detailed component results

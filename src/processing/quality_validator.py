@@ -71,17 +71,16 @@ class ResidualPIIDetector:
             'ssn_fragments': re.compile(r'\b\d{3}-?\d{2}-?\d{4}\b'),
             'credit_card_fragments': re.compile(r'\b(?:\d{4}[-\s]?){3}\d{4}\b'),
             'ip_address_fragments': re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b'),
-            'name_fragments': re.compile(r'\b[A-Z][a-z]+ [A-Z][a-z]+\b'),
             'hostname_fragments': re.compile(r'\b[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\\b'),
             'api_key_fragments': re.compile(r'\b[A-Za-z0-9]{20,}\b'),
-            'internal_paths': re.compile(r'/[a-zA-Z0-9_./-]+'),
+            'internal_paths': re.compile(r'(?<!\w)/(?:[a-zA-Z0-9_.-]+/)+[a-zA-Z0-9_.-]+'),
             'customer_ids': re.compile(r'\b(?:cust|customer|user|account)_\d+\b', re.IGNORECASE)
         }
         
         # Patterns that should NOT be flagged (false positives)
         self.exclusion_patterns = {
             'redaction_markers': re.compile(r'\[REDACTED_[A-Z_]+\]'),
-            'pseudonyms': re.compile(r'Person_[a-f0-9]{6}'),
+            'pseudonyms': re.compile(r'Person_[a-f0-9]{8}'),
             'example_text': re.compile(r'\(example:.*?\)'),
             'placeholder_text': re.compile(r'\[.*?\]'),
             'technical_refs': re.compile(r'(?:SEC|INC|JIRA|TICKET)-\d+', re.IGNORECASE)
@@ -91,12 +90,6 @@ class ResidualPIIDetector:
         """Detect residual PII in processed text"""
         issues = []
         
-        # Get positions that were already processed
-        processed_positions = set()
-        for decision in original_decisions:
-            for pos in range(decision.start_pos, decision.end_pos):
-                processed_positions.add(pos)
-        
         # Check each pattern
         for pattern_name, pattern_regex in self.residual_patterns.items():
             matches = pattern_regex.finditer(processed_text)
@@ -105,10 +98,6 @@ class ResidualPIIDetector:
                 start_pos = match.start()
                 end_pos = match.end()
                 matched_text = match.group()
-                
-                # Skip if this position was already processed
-                if any(pos in processed_positions for pos in range(start_pos, end_pos)):
-                    continue
                 
                 # Skip if it matches exclusion patterns
                 if self._is_excluded_text(matched_text):
@@ -127,6 +116,22 @@ class ResidualPIIDetector:
                     detection_method=f"residual_pattern_{pattern_name}"
                 )
                 issues.append(issue)
+
+        # Capitalized two-word phrases also describe incident titles and job
+        # roles. Use the named-entity detector for residual person names.
+        for occurrence in self.pii_detector.detect_pii(processed_text, entities=['PERSON']):
+            if self._is_excluded_text(occurrence.text):
+                continue
+            issues.append(ValidationIssue(
+                issue_type='residual_pii',
+                severity='high',
+                description=f"Residual person name detected: '{occurrence.text}'",
+                location={'start_pos': occurrence.start, 'end_pos': occurrence.end,
+                          'text': occurrence.text},
+                suggested_fix=f"Pseudonymize '{occurrence.text}'",
+                confidence=occurrence.score,
+                detection_method='residual_person_ner',
+            ))
         
         return issues
     
@@ -223,7 +228,9 @@ class SchemaValidator:
         
         # Check for broken brackets/parentheses
         original_brackets = original_text.count('[') + original_text.count(']')
-        processed_brackets = processed_text.count('[') + processed_text.count(']')
+        # Redaction placeholders intentionally add square brackets.
+        text_without_markers = re.sub(r'\[(?:REDACTED|PSEUDONYM)_[A-Z_]+\]', '', processed_text)
+        processed_brackets = text_without_markers.count('[') + text_without_markers.count(']')
         
         if abs(original_brackets - processed_brackets) > 2:  # Allow some variance
             issue = ValidationIssue(
@@ -258,7 +265,7 @@ class ConsistencyChecker:
     
     def __init__(self):
         self.pseudonym_patterns = {
-            'person_names': re.compile(r'Person_[a-f0-9]{6}'),
+            'person_names': re.compile(r'Person_[a-f0-9]{8}'),
             'emails': re.compile(r'\[REDACTED_EMAIL\]'),
             'phones': re.compile(r'\[REDACTED_PHONE\]'),
             'hostnames': re.compile(r'server-[a-f0-9]{3}\.internal'),
@@ -343,29 +350,9 @@ class ConsistencyChecker:
     
     def _check_replacement_consistency(self, processed_text: str, decisions: List[ArbitrationDecision]) -> List[ValidationIssue]:
         """Check that replacements are applied consistently"""
-        issues = []
-        
-        # Check for duplicate replacements that should be unique
-        replacement_counts = {}
-        for decision in decisions:
-            if decision.final_action == RedactionAction.REDACT:
-                replacement = decision.replacement_text
-                replacement_counts[replacement] = replacement_counts.get(replacement, 0) + 1
-        
-        # Flag if too many identical redactions (might indicate over-redaction)
-        for replacement, count in replacement_counts.items():
-            if count > 10:  # Arbitrary threshold
-                issue = ValidationIssue(
-                    issue_type='quality_issue',
-                    severity='medium',
-                    description=f"High frequency of '{replacement}' replacements ({count} times)",
-                    suggested_fix="Review if this indicates over-redaction",
-                    confidence=0.6,
-                    detection_method="replacement_analysis"
-                )
-                issues.append(issue)
-        
-        return issues
+        # Repeated placeholders are expected when one identifier appears many
+        # times; their count alone is not evidence of a quality problem.
+        return []
 
 class AdversarialChecker:
     """Performs adversarial checks to find missed PII"""
@@ -378,7 +365,6 @@ class AdversarialChecker:
             'credit_card_variants': re.compile(r'\b(?:\d{4}\s*[-\s]?\s*){3}\d{4}\b'),
             'encoded_data': re.compile(r'\b[A-Za-z0-9+/]{20,}={0,2}\b'),  # Base64-like
             'hex_patterns': re.compile(r'\b[0-9a-fA-F]{8,}\b'),
-            'obfuscated_names': re.compile(r'\b[A-Z][a-z]+\s+[A-Z][a-z]+\b')
         }
     
     def perform_adversarial_check(self, processed_text: str) -> List[ValidationIssue]:

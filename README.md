@@ -17,13 +17,15 @@ Each incident flows through seven stages:
 
 1. **Policy load** — read the JSON policy that defines which categories are PII and which action to take (redact, pseudonymize, keep).
 2. **Deterministic extraction** — find obvious PII with regex, Presidio, and spaCy (emails, phones, SSNs, IPs, names).
-3. **LLM detection** — a "finder" model (OpenAI `gpt-5` by default) catches contextual PII the rules miss.
+3. **Contextual detection** — the current finder uses enhanced rules and simulated LLM analysis to suggest additional candidates. The configured OpenAI finder model is not called by this stage yet.
 4. **LLM verification** — a "judge" model (Anthropic `claude-sonnet-4-6` by default) re-checks each candidate against the policy.
 5. **Arbitration & redaction** — conflicting decisions are resolved, then the text is rewritten with redactions or pseudonyms.
 6. **Quality validation** — pattern-based scan of the redacted text for residual PII and schema integrity issues; produces `quality_metrics`.
-7. **LLM final review** — one extra LLM call per incident asks the judge model whether the redacted text still contains identifiable info, including *contextual* re-identification (descriptions that uniquely point at someone without naming them). Catches what the pattern-based validator can't. This is the most expensive stage, so it runs last and skips automatically in simulation mode or when no API key is set. Disable explicitly with `--skip-final-review`.
+7. **LLM final review** — the judge model checks the redacted text for remaining identifiers, including *contextual* re-identification. Long text is reviewed in overlapping windows so the tail is covered too. This stage uses one call per window, runs last, and skips in simulation mode or when no API key is set. An unexpected skip is flagged for human review. Disable explicitly with `--skip-final-review`.
 
-A simulation mode (`--llm-simulation`) skips stages 3, 4, and 7 (no API calls), so the pipeline can be exercised without keys. Models are configurable in `config/llm_models.json`.
+Simulation mode (`--llm-simulation`) still runs the rule-based finder and simulated judge, while skipping real API calls and the final review. Models are configurable in `config/llm_models.json`.
+
+Each incident is processed with separate detector, judge, arbitration, and validation state. The parallel path keeps a long incident intact so identifiers cannot be split by fixed character boundaries. Validation issues and incomplete final reviews are included in the human-review decision.
 
 ## What it removes
 
@@ -60,12 +62,13 @@ CLI control:
 
 Automated redaction is not infallible, so each incident is scored against a confidence threshold (default `0.7`, override with `--confidence-threshold`). Any incident whose `overall_quality_score` (or sub-metric: precision, recall, F1) falls below that threshold is flagged for human review.
 
-Two signals can flip the flag:
+Three signals can flip the flag:
 
 1. **Quality score below threshold** — the validator's `overall_quality_score` (or any of `precision` / `recall` / `f1_score`) falls below the threshold.
 2. **LLM final review verdict** — stage 7 returns `is_clean: false` with a list of suspicious snippets.
+3. **Validation or review coverage** — residual PII, schema violations, high-severity issues, or an unexpected final-review failure also require review.
 
-Either signal sets `needs_review: true`.
+Any of these signals sets `needs_review: true`.
 
 Where the flag shows up:
 
@@ -77,10 +80,13 @@ A reviewer should diff the original vs processed text for those incidents, focus
 
 ## Known limitations
 
-- **English only.** Detection relies on `spaCy en_core_web_sm`; non-English incidents will have lower recall.
+- **English only.** Presidio uses an English spaCy model; non-English incidents will have lower recall.
 - **Schema-tuned.** Field extraction is tuned to the included sample shape (Rootly export). Other shapes need an adapter in `src/data_collection/`.
-- **LLM-dependent quality.** Stages 3–4 use LLMs; results depend on the model, prompt, and policy. Simulation mode skips these stages and will miss contextual PII the rules don't catch.
-- **Pseudonym consistency is per-run.** The same name in two separate processing runs may map to different pseudonyms. Use the SQLite store (`db_cli.py`) if you need cross-run consistency.
+- **LLM-dependent quality.** The judge and final review depend on the configured model, prompt, and policy. Simulation mode does not provide an independent LLM check for contextual PII.
+- **Finder is simulated.** Stage 3 currently uses enhanced rules and simulated span analysis even when real APIs are enabled; the configured finder model is not invoked.
+- **Quality metrics are heuristics.** The reported precision and recall are estimated from pipeline decisions and residual checks, without labeled ground truth.
+- **Pseudonyms are deterministic.** The same input produces the same pseudonym across runs. These values are not anonymization and may be guessable for common names; treat them as sensitive.
+- **Audit files contain originals.** `processing_results.json`, detailed reports, and stage audits include unredacted source text. Keep the output directory private and share only reviewed processed text.
 - **No guarantee of zero residual PII.** The quality validator flags issues but cannot certify a redacted output is clean — always review high-sensitivity outputs manually.
 - **API cost scales with volume** when using real LLM calls; benchmark with `--llm-simulation` first.
 
@@ -91,7 +97,7 @@ git clone https://github.com/Rootly-AI-Labs/incident-data-cleaner.git
 cd incident-data-cleaner
 pip install -r requirements.txt
 pip install -e .
-python -m spacy download en_core_web_sm
+python -m spacy download en_core_web_lg
 ```
 
 ## Usage
@@ -111,7 +117,7 @@ Run `python process_incidents.py --help` for all flags. Results land in `output/
 ## Configuration
 
 - **Redaction policy:** `config/policies/default_policy.json` defines categories, sensitivity levels, and actions. Pass a custom one with `--policy path/to/policy.json`.
-- **LLM models:** `config/llm_models.json` selects the finder/judge models. Defaults are `gpt-5` (OpenAI) for the finder and `claude-sonnet-4-6` (Anthropic) for the judge; change those strings to use a different model. Keys come from `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`.
+- **LLM models:** `config/llm_models.json` selects the configured finder/judge models. The current finder stage is simulated; the judge and final reviewer use `claude-sonnet-4-6` (Anthropic) by default. The judge key comes from `ANTHROPIC_API_KEY`.
 - **Confidence threshold:** `--confidence-threshold 0.7` (default) controls when an incident is flagged for human review.
 
 ## Database CLI

@@ -123,14 +123,22 @@ class DeterministicExtractor:
             'slack_channel': re.compile(r'#[a-zA-Z0-9\-_]+', re.IGNORECASE),
             'docker_image': re.compile(r'[a-zA-Z0-9]+/[a-zA-Z0-9\-_]+:[a-zA-Z0-9\-_.]+', re.IGNORECASE)
         }
-        
-        # Keywords that suggest internal/potentially sensitive content
-        self.internal_keywords = {
-            'prod', 'production', 'staging', 'dev', 'development', 
-            'internal', 'admin', 'root', 'backup', 'confidential',
-            'private', 'secret', 'password', 'key', 'token'
+
+        # Presidio can miss valid-looking identifiers in incident examples
+        # (especially 555 phone numbers and test card numbers). These formats
+        # have high enough signal to warrant a deterministic fallback.
+        self.safety_patterns = {
+            'email': re.compile(r'\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b'),
+            'phone': re.compile(r'(?<!\w)(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}(?!\w)'),
+            'ssn': re.compile(r'(?<!\d)\d{3}-\d{2}-\d{4}(?!\d)'),
+            'credit_card': re.compile(r'(?<!\d)(?:\d{4}[- ]?){3}\d{4}(?!\d)'),
         }
-    
+
+        self.secret_assignment_pattern = re.compile(
+            r'\b(?:api[_-]?key|password|secret|token)\s*[:=]\s*[^\s,;]+',
+            re.IGNORECASE,
+        )
+
     def extract_deterministic(self, text: str) -> DeterministicOutput:
         """Main extraction method"""
         logger.info(f"Starting deterministic extraction on text of length {len(text)}")
@@ -229,6 +237,27 @@ class DeterministicExtractor:
         for entity in existing_entities:
             for pos in range(entity.start_pos, entity.end_pos):
                 existing_positions.add(pos)
+
+        for pattern_name, pattern_regex in self.safety_patterns.items():
+            policy_pattern = self.policy.patterns.get(pattern_name)
+            if policy_pattern is None:
+                continue
+            for match in pattern_regex.finditer(text):
+                start_pos, end_pos = match.span()
+                if any(pos in existing_positions for pos in range(start_pos, end_pos)):
+                    continue
+                results.append(DeterministicResult(
+                    entity_type=pattern_name,
+                    original_text=match.group(),
+                    start_pos=start_pos,
+                    end_pos=end_pos,
+                    confidence=0.95,
+                    detection_method='regex_fallback',
+                    category=policy_pattern.category,
+                    suggested_action=self.policy.get_action_for_pattern(pattern_name),
+                    context_snippet=self._extract_context(text, start_pos, end_pos),
+                ))
+                existing_positions.update(range(start_pos, end_pos))
         
         for pattern_name, pattern_regex in self.custom_patterns.items():
             try:
@@ -265,38 +294,23 @@ class DeterministicExtractor:
         return results
     
     def _extract_with_keywords(self, text: str, existing_entities: List[DeterministicResult]) -> List[DeterministicResult]:
-        """Extract using keyword analysis"""
+        """Detect explicit credential assignments without matching prose keywords."""
         results = []
-        
-        # Check for keywords indicating internal/sensitive content
-        text_lower = text.lower()
-        
-        for keyword in self.internal_keywords:
-            if keyword in text_lower:
-                # Look for patterns around keywords
-                import re as regex_module
-                pattern = f'\b[a-zA-Z0-9\-_./@]{{3,{{50}}}}\s*{regex_module.escape(keyword)}\b|\b{regex_module.escape(keyword)}\s*[a-zA-Z0-9\-_./@]{{3,{{50}}}}\b'
-                
-                matches = regex_module.finditer(pattern, text, regex_module.IGNORECASE)
-                
-                for match in matches:
-                    # Simple check to avoid obvious duplicates
-                    if any(entity.start_pos <= match.start() < match.end() <= entity.end_pos 
-                           for entity in existing_entities):
-                        continue
-                    
-                    result = DeterministicResult(
-                        entity_type=f"internal_keyword_{keyword}",
-                        original_text=match.group(),
-                        start_pos=match.start(),
-                        end_pos=match.end(),
-                        confidence=0.3,  # Lower confidence for keyword matches
-                        detection_method='keyword',
-                        category=DataCategory.SECRETS,
-                        suggested_action=RedactionAction.REDACT,
-                        context_snippet=self._extract_context(text, match.start(), match.end())
-                    )
-                    results.append(result)
+        for match in self.secret_assignment_pattern.finditer(text):
+            if any(entity.start_pos < match.end() and match.start() < entity.end_pos
+                   for entity in existing_entities):
+                continue
+            results.append(DeterministicResult(
+                entity_type='api_key',
+                original_text=match.group(),
+                start_pos=match.start(),
+                end_pos=match.end(),
+                confidence=0.9,
+                detection_method='keyword_assignment',
+                category=DataCategory.SECRETS,
+                suggested_action=RedactionAction.REDACT,
+                context_snippet=self._extract_context(text, match.start(), match.end()),
+            ))
         
         return results
     

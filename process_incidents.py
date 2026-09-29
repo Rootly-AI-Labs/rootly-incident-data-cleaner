@@ -22,6 +22,7 @@ from main import PIIRedactionPipeline
 from src.parallel_processing_pipeline import ParallelPIIProcessingPipeline, ProcessingConfig
 
 DEFAULT_CONFIDENCE_THRESHOLD = 0.7
+OUTPUT_SCHEMA_VERSION = "1.1"
 
 def load_incident_data(file_path: str) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
     """Load incident data from JSON or JSONL file"""
@@ -134,23 +135,32 @@ def assess_human_review(results: Dict[str, Any], threshold: float) -> Dict[str, 
                 low_confidence_signals.append({'metric': key, 'value': value})
 
     metrics_flag = quality_score < threshold or bool(low_confidence_signals)
+    validation_flag = any(
+        (results.get('critical_issues', 0), results.get('high_issues', 0),
+         metrics.get('residual_pii_count', 0), metrics.get('schema_violations', 0))
+    )
 
     final_review = results.get('final_review') or {}
     final_review_skipped = bool(final_review.get('skipped'))
+    final_review_unavailable = final_review_skipped and final_review.get('skip_reason') != 'disabled'
     final_review_flag = (
         not final_review_skipped
         and final_review
         and not bool(final_review.get('is_clean', True))
     )
 
-    needs_review = metrics_flag or bool(final_review_flag)
+    needs_review = metrics_flag or validation_flag or bool(final_review_flag) or final_review_unavailable
 
     reasons = []
     if metrics_flag:
-        reasons.append(f"quality score {quality_score:.3f} below threshold {threshold:.2f}")
+        reasons.append(f"one or more quality metrics below threshold {threshold:.2f}")
+    if validation_flag:
+        reasons.append("validation found residual PII, schema violations, or high-severity issues")
     if final_review_flag:
         n_issues = len(final_review.get('issues') or [])
         reasons.append(f"LLM final review flagged {n_issues} issue(s)")
+    if final_review_unavailable:
+        reasons.append(f"LLM final review unavailable ({final_review.get('skip_reason', 'unknown')})")
     if not reasons:
         reasons.append(f"quality score {quality_score:.3f} meets threshold {threshold:.2f}")
 
@@ -159,8 +169,10 @@ def assess_human_review(results: Dict[str, Any], threshold: float) -> Dict[str, 
         'confidence_threshold': threshold,
         'quality_score': quality_score,
         'low_confidence_signals': low_confidence_signals,
+        'validation_flag': validation_flag,
         'final_review_flag': bool(final_review_flag),
         'final_review_skipped': final_review_skipped,
+        'final_review_unavailable': final_review_unavailable,
         'reason': '; '.join(reasons),
     }
 
@@ -172,6 +184,7 @@ def generate_detailed_report(results: Dict[str, Any], incident_id: str, output_d
     review = assess_human_review(results, confidence_threshold)
 
     report = {
+        "schema_version": OUTPUT_SCHEMA_VERSION,
         "incident_id": incident_id,
         "processing_timestamp": datetime.now().isoformat(),
         "summary": {
@@ -307,7 +320,7 @@ async def process_incidents(file_path: str, output_dir: Optional[str] = None, ll
         print(f"🔄 Processing {len(incidents)} incidents in parallel...")
         start_time = time.time()
         
-        results = await pipeline.process_multiple_incidents(incidents, str(output_dir))
+        outcomes = await pipeline.process_multiple_incidents(incidents, str(output_dir))
         
         end_time = time.time()
         processing_time = end_time - start_time
@@ -317,8 +330,19 @@ async def process_incidents(file_path: str, output_dir: Optional[str] = None, ll
         
         # Generate reports for each result
         all_results = []
-        for i, result in enumerate(results):
-            incident_id = f"incident_{i+1}"  # Simplified ID for parallel processing
+        failed_results = []
+        for outcome in outcomes:
+            incident_id = outcome.incident_id
+            if outcome.result is None:
+                failed_results.append({
+                    'incident_id': incident_id,
+                    'incident_index': outcome.incident_index,
+                    'error': outcome.error or "Unknown processing error",
+                })
+                print(f"❌ Error processing {incident_id}: {outcome.error or 'Unknown processing error'}")
+                continue
+
+            result = outcome.result
             result_dict = {
                 'original_text': result.original_text,
                 'processed_text': result.processed_text,
@@ -335,7 +359,7 @@ async def process_incidents(file_path: str, output_dir: Optional[str] = None, ll
 
             all_results.append({
                 'incident_id': incident_id,
-                'incident_index': i + 1,
+                'incident_index': outcome.incident_index,
                 'results': result_dict,
                 'report_file': str(report_file)
             })
@@ -352,6 +376,7 @@ async def process_incidents(file_path: str, output_dir: Optional[str] = None, ll
         
         # Process each incident sequentially
         all_results = []
+        failed_results = []
         
         for i, incident in enumerate(incidents, 1):
             # Extract incident ID automatically
@@ -383,15 +408,20 @@ async def process_incidents(file_path: str, output_dir: Optional[str] = None, ll
                 
             except Exception as e:
                 print(f"❌ Error processing {incident_id}: {e}")
+                failed_results.append({
+                    'incident_id': incident_id,
+                    'incident_index': i,
+                    'error': str(e),
+                })
                 continue
     
     # Generate overall summary
-    if all_results:
-        generate_overall_summary(all_results, output_dir, file_path, confidence_threshold)
+    if all_results or failed_results:
+        generate_overall_summary(all_results, failed_results, output_dir, file_path, confidence_threshold)
         print(f"\n✅ Processing complete! Reports saved to: {output_dir}")
         print(f"📊 Processed {len(all_results)} incidents successfully")
 
-def generate_overall_summary(all_results: List[Dict], output_dir: Path, source_file: str,
+def generate_overall_summary(all_results: List[Dict], failed_results: List[Dict], output_dir: Path, source_file: str,
                              confidence_threshold: float = DEFAULT_CONFIDENCE_THRESHOLD):
     """Generate overall summary report"""
 
@@ -408,13 +438,21 @@ def generate_overall_summary(all_results: List[Dict], output_dir: Path, source_f
     ]
 
     summary = {
+        "schema_version": OUTPUT_SCHEMA_VERSION,
         "processing_timestamp": datetime.now().isoformat(),
         "source_file": str(source_file),
-        "total_incidents": len(all_results),
+        "total_incidents": len(all_results) + len(failed_results),
         "successful_incidents": len(all_results),
+        "failed_incidents": len(failed_results),
         "overall_statistics": {
-            "average_quality_score": sum(r['results']['quality_metrics']['overall_quality_score'] for r in all_results) / len(all_results),
-            "average_text_reduction": sum(r['results']['processing_stats']['text_reduction_percentage'] for r in all_results) / len(all_results),
+            "average_quality_score": (
+                sum(r['results']['quality_metrics']['overall_quality_score'] for r in all_results) / len(all_results)
+                if all_results else 0
+            ),
+            "average_text_reduction": (
+                sum(r['results']['processing_stats']['text_reduction_percentage'] for r in all_results) / len(all_results)
+                if all_results else 0
+            ),
             "total_pseudonyms_generated": sum(len(r['results']['pseudonym_map']) for r in all_results),
             "total_validation_issues": sum(r['results']['validation_issues'] for r in all_results),
             "total_critical_issues": sum(r['results']['critical_issues'] for r in all_results)
@@ -429,6 +467,7 @@ def generate_overall_summary(all_results: List[Dict], output_dir: Path, source_f
             "incidents_flagged_by_llm": len(final_review_flagged),
             "flagged_incident_ids": final_review_flagged,
         },
+        "failed_incident_details": failed_results,
         "incident_summaries": []
     }
 
@@ -456,6 +495,8 @@ def generate_overall_summary(all_results: List[Dict], output_dir: Path, source_f
     print(f"{'='*80}")
     print(f"📁 Source File: {Path(source_file).name}")
     print(f"📊 Total Incidents Processed: {summary['total_incidents']}")
+    print(f"✅ Successful Incidents: {summary['successful_incidents']}")
+    print(f"❌ Failed Incidents: {summary['failed_incidents']}")
     print(f"📈 Average Quality Score: {summary['overall_statistics']['average_quality_score']:.3f}")
     print(f"📉 Average Text Reduction: {summary['overall_statistics']['average_text_reduction']:.1f}%")
     print(f"🔄 Total Pseudonyms Generated: {summary['overall_statistics']['total_pseudonyms_generated']}")
@@ -464,7 +505,7 @@ def generate_overall_summary(all_results: List[Dict], output_dir: Path, source_f
     review_count = summary['human_review']['incidents_needing_review_count']
     if review_count:
         threshold = summary['human_review']['confidence_threshold']
-        print(f"👀 Needs Human Review: {review_count} incident(s) below confidence threshold {threshold:.2f}")
+        print(f"👀 Needs Human Review: {review_count} incident(s) (quality threshold {threshold:.2f} or validation/review flag)")
         for incident_id in summary['human_review']['incidents_needing_review']:
             print(f"     - {incident_id}")
     else:

@@ -4,8 +4,9 @@ Enhanced orchestrator with parallel processing capabilities
 """
 
 import asyncio
+import copy
 import logging
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 import time
@@ -25,6 +26,8 @@ from config.llm_config import LLMConfigManager
 
 logger = logging.getLogger(__name__)
 
+OUTPUT_SCHEMA_VERSION = "1.1"
+
 @dataclass
 class ParallelProcessingResult:
     """Complete result from parallel PII processing pipeline"""
@@ -41,6 +44,15 @@ class ParallelProcessingResult:
     parallel_stats: Dict[str, Any]
     final_review: Optional[Dict[str, Any]] = None
 
+
+@dataclass
+class IncidentProcessingOutcome:
+    """Structured outcome for one incident in a batch run."""
+    incident_id: str
+    incident_index: int
+    result: Optional[ParallelProcessingResult] = None
+    error: Optional[str] = None
+
 @dataclass
 class ProcessingConfig:
     """Configuration for parallel processing"""
@@ -48,7 +60,7 @@ class ProcessingConfig:
     max_concurrent_llm_calls: int = 10
     enable_deterministic_parallel: bool = True
     enable_validation_parallel: bool = True
-    chunk_size: int = 1000  # For large text processing
+    chunk_size: int = 1000  # Retained for compatibility; text is processed whole
     timeout_seconds: int = 300
 
 class ParallelPIIProcessingPipeline:
@@ -96,13 +108,23 @@ class ParallelPIIProcessingPipeline:
     
     async def process_text(self, text: str, output_dir: Optional[str] = None) -> ParallelProcessingResult:
         """Process text through the parallel PII processing pipeline"""
+
+        # Stage processors hold mutable detections, statistics, and pseudonym
+        # caches. Give each incident its own instances while sharing the LLM
+        # semaphore and configuration across the batch.
+        processor = copy.copy(self)
+        processor.deterministic_extractor = DeterministicExtractor(self.policy)
+        processor.llm_detector = LLMFinderProcessor(self.policy)
+        processor.llm_verifier = LLMJudgeProcessor(self.policy, self.config_manager)
+        processor.arbitration_engine = ArbitrationProcessor(self.policy, allowlist=self.allowlist)
+        processor.quality_validator = ValidationProcessor(self.policy)
+        return await processor._process_text_once(text, output_dir)
+
+    async def _process_text_once(self, text: str, output_dir: Optional[str] = None) -> ParallelProcessingResult:
+        """Run one incident with private stage state."""
         
         start_time = time.time()
         logger.info(f"Starting parallel PII processing pipeline for text of length {len(text)}")
-        
-        # For very large texts, process in chunks
-        if len(text) > self.config.chunk_size * 2:
-            return await self._process_large_text(text, output_dir)
         
         # Parallel execution of independent stages
         try:
@@ -148,6 +170,7 @@ class ParallelPIIProcessingPipeline:
             
             # Wait for both to complete
             validation_result, result_data = await asyncio.gather(validation_task, result_prep_task)
+            result_data['audit_trail']['validation_result'] = validation_result
 
             # Step 6: LLM Final Review (only when real APIs enabled; cheap no-op otherwise)
             logger.info("Step 6: LLM Final Review")
@@ -269,7 +292,7 @@ class ParallelPIIProcessingPipeline:
                 'llm_detections': len(llm_detection_result.detected_spans),
                 'llm_verifications': len(llm_verification_result.judge_decisions),
                 'arbitration_decisions': len(arbitration_result.arbitration_decisions),
-                'text_reduction_percentage': ((len(text) - len(arbitration_result.processed_text)) / len(text)) * 100
+                'text_reduction_percentage': ((len(text) - len(arbitration_result.processed_text)) / len(text)) * 100 if text else 0.0
             },
             'audit_trail': {
                 'deterministic_result': deterministic_result,
@@ -278,77 +301,6 @@ class ParallelPIIProcessingPipeline:
                 'arbitration_result': arbitration_result
             }
         }
-    
-    async def _process_large_text(self, text: str, output_dir: Optional[str] = None) -> ParallelProcessingResult:
-        """Process large text by chunking and parallel processing"""
-        logger.info(f"Processing large text ({len(text)} chars) in chunks of {self.config.chunk_size}")
-        
-        # Split text into chunks
-        chunks = [text[i:i + self.config.chunk_size] for i in range(0, len(text), self.config.chunk_size)]
-        
-        # Process chunks in parallel
-        chunk_tasks = []
-        for i, chunk in enumerate(chunks):
-            task = asyncio.create_task(self.process_text(chunk))
-            chunk_tasks.append((i, task))
-        
-        # Wait for all chunks to complete
-        chunk_results = []
-        for i, task in chunk_tasks:
-            try:
-                result = await task
-                chunk_results.append((i, result))
-            except Exception as e:
-                logger.error(f"Error processing chunk {i}: {e}")
-                continue
-        
-        # Merge results
-        return self._merge_chunk_results(chunk_results, text, output_dir)
-    
-    def _merge_chunk_results(self, chunk_results: List[Tuple[int, ParallelProcessingResult]], 
-                           original_text: str, output_dir: Optional[str] = None) -> ParallelProcessingResult:
-        """Merge results from multiple chunks"""
-        # Sort by chunk index
-        chunk_results.sort(key=lambda x: x[0])
-        
-        # Combine processed text
-        processed_text = ''.join(result.processed_text for _, result in chunk_results)
-        
-        # Combine pseudonym maps
-        combined_pseudonym_map = {}
-        for _, result in chunk_results:
-            combined_pseudonym_map.update(result.pseudonym_map)
-        
-        # Aggregate statistics
-        total_validation_issues = sum(result.validation_issues for _, result in chunk_results)
-        total_critical_issues = sum(result.critical_issues for _, result in chunk_results)
-        total_high_issues = sum(result.high_issues for _, result in chunk_results)
-        
-        # Combine recommendations
-        all_recommendations = []
-        for _, result in chunk_results:
-            all_recommendations.extend(result.recommendations)
-        
-        # Use the first chunk's structure as base
-        base_result = chunk_results[0][1]
-        
-        return ParallelProcessingResult(
-            original_text=original_text,
-            processed_text=processed_text,
-            quality_metrics=base_result.quality_metrics,
-            validation_issues=total_validation_issues,
-            critical_issues=total_critical_issues,
-            high_issues=total_high_issues,
-            recommendations=list(set(all_recommendations)),  # Remove duplicates
-            pseudonym_map=combined_pseudonym_map,
-            processing_stats=base_result.processing_stats,
-            audit_trail=base_result.audit_trail,
-            parallel_stats={
-                'chunks_processed': len(chunk_results),
-                'total_chunks': len(chunk_results),
-                'chunk_processing_mode': True
-            }
-        )
     
     def _calculate_parallel_stats(self, start_time: float, end_time: float, results: Dict[str, Any]) -> Dict[str, Any]:
         """Calculate parallel processing statistics"""
@@ -373,6 +325,7 @@ class ParallelPIIProcessingPipeline:
         
         # Save main results
         main_results = {
+            'schema_version': OUTPUT_SCHEMA_VERSION,
             'original_text': result.original_text,
             'processed_text': result.processed_text,
             'quality_metrics': result.quality_metrics,
@@ -382,7 +335,8 @@ class ParallelPIIProcessingPipeline:
             'recommendations': result.recommendations,
             'pseudonym_map': result.pseudonym_map,
             'processing_stats': result.processing_stats,
-            'parallel_stats': result.parallel_stats
+            'parallel_stats': result.parallel_stats,
+            'final_review': result.final_review,
         }
         
         # Save files in parallel
@@ -507,8 +461,8 @@ class ParallelPIIProcessingPipeline:
             with open(file_path, 'w') as f:
                 json.dump({'result': str(result), 'type': str(type(result))}, f, indent=2)
 
-    async def process_multiple_incidents(self, incidents: List[Dict[str, Any]], 
-                                       output_dir: Optional[str] = None) -> List[ParallelProcessingResult]:
+    async def process_multiple_incidents(self, incidents: List[Dict[str, Any]],
+                                       output_dir: Optional[str] = None) -> List[IncidentProcessingOutcome]:
         """Process multiple incidents in parallel"""
         
         logger.info(f"Processing {len(incidents)} incidents in parallel")
@@ -516,7 +470,7 @@ class ParallelPIIProcessingPipeline:
         # Create semaphore for incident processing
         incident_semaphore = asyncio.Semaphore(self.config.max_concurrent_incidents)
         
-        async def process_single_incident(incident: Dict[str, Any], incident_id: str):
+        async def process_single_incident(incident: Dict[str, Any], incident_id: str, incident_index: int):
             """Process a single incident with semaphore control"""
             async with incident_semaphore:
                 try:
@@ -533,32 +487,36 @@ class ParallelPIIProcessingPipeline:
                     result = await self.process_text(text_to_process, incident_output_dir)
                     
                     logger.info(f"Successfully processed incident {incident_id}")
-                    return result
+                    return IncidentProcessingOutcome(
+                        incident_id=incident_id,
+                        incident_index=incident_index,
+                        result=result,
+                    )
                     
                 except Exception as e:
                     logger.error(f"Error processing incident {incident_id}: {e}")
-                    raise
+                    return IncidentProcessingOutcome(
+                        incident_id=incident_id,
+                        incident_index=incident_index,
+                        error=str(e),
+                    )
         
         # Create tasks for all incidents
         tasks = []
-        for i, incident in enumerate(incidents):
+        for i, incident in enumerate(incidents, 1):
             incident_id = self._extract_incident_id(incident)
-            task = asyncio.create_task(process_single_incident(incident, incident_id))
+            task = asyncio.create_task(process_single_incident(incident, incident_id, i))
             tasks.append(task)
         
         # Process all incidents in parallel
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        # Filter out exceptions and return successful results
-        successful_results = []
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                logger.error(f"Failed to process incident {i}: {result}")
-            else:
-                successful_results.append(result)
-        
-        logger.info(f"Successfully processed {len(successful_results)}/{len(incidents)} incidents")
-        return successful_results
+        outcomes = await asyncio.gather(*tasks)
+
+        successful_count = sum(1 for outcome in outcomes if outcome.result is not None)
+        failed_count = len(outcomes) - successful_count
+        logger.info(
+            f"Processed {len(outcomes)} incidents: {successful_count} succeeded, {failed_count} failed"
+        )
+        return outcomes
     
     def _extract_incident_id(self, incident: Dict[str, Any]) -> str:
         """Extract incident ID from incident data"""

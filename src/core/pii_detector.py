@@ -2,6 +2,7 @@
 Core PII detection functionality
 """
 import logging
+import threading
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 import regex as re
@@ -22,6 +23,9 @@ class PIIOccurrence:
 
 class PIIDetector:
     """Main PII detection engine"""
+
+    _analyzer = None
+    _analyzer_lock = threading.RLock()
     
     overhead_content_types = [
         "PERSON",
@@ -40,8 +44,12 @@ class PIIDetector:
     def __init__(self):
         """Initialize the PII detector"""
         try:
-            # Initialize Presidio analyzer
-            self.analyzer = AnalyzerEngine()
+            # Presidio loads a large spaCy model. Reuse one analyzer across
+            # incidents instead of loading the model for every pipeline stage.
+            with self._analyzer_lock:
+                if PIIDetector._analyzer is None:
+                    PIIDetector._analyzer = AnalyzerEngine()
+                self.analyzer = PIIDetector._analyzer
             logger.info("PII Detector initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize PII detector: {e}")
@@ -63,11 +71,12 @@ class PIIDetector:
             
         try:
             # Use Presidio to analyze the text
-            results: List[RecognizerResult] = self.analyzer.analyze(
-                text=text,
-                entities=entities,
-                language="en"
-            )
+            with self._analyzer_lock:
+                results: List[RecognizerResult] = self.analyzer.analyze(
+                    text=text,
+                    entities=entities,
+                    language="en"
+                )
             
             # Convert to our PIIOccurrence format
             pii_occurrences = []

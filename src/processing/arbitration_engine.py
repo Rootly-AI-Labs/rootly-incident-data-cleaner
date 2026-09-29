@@ -116,6 +116,15 @@ class ConflictResolver:
         # Find winning action
         winning_action_name = max(weighted_votes.items(), key=lambda x: x[1])[0]
         winning_action = RedactionAction(winning_action_name)
+
+        # A rule-based person detection is a positive privacy signal. A
+        # contextual RETAIN vote must not expose that name; exact allowlist
+        # overrides are handled separately by the arbitration processor.
+        if (entity_type == 'person_name'
+                and stage_decisions.get('deterministic') == RedactionAction.PSEUDONYMIZE
+                and winning_action == RedactionAction.RETAIN):
+            winning_action = RedactionAction.PSEUDONYMIZE
+            vote_reasons.append("confirmed person name requires pseudonymization")
         
         # Context-dependent adjustments
         if entity_type in self.entity_rules and self.entity_rules[entity_type].get('context_dependent'):
@@ -130,11 +139,6 @@ class ConflictResolver:
         """Apply context-dependent rules to proposed action"""
         
         context_lower = context.lower()
-        
-        # Public/safe contexts
-        public_indicators = ['public', 'support@', 'noreply@', 'admin@company.com', 'team member jane', 'contact sales']
-        if any(indicator in context_lower for indicator in public_indicators):
-            return RedactionAction.RETAIN
         
         # Security incident contexts - more aggressive
         security_indicators = ['breach', 'security incident', 'unauthorized access', 'data leak', 'compromise']
@@ -159,7 +163,7 @@ class TextProcessor:
         # Pseudonym generation patterns
         self.pseudonym_patterns = {
             'email': lambda orig: f"user_{self._hash_text(orig, 4)}@company.com",
-            'person_name': lambda orig: f"Person_{self._hash_text(orig, 6)}",
+            'person_name': lambda orig: f"Person_{self._hash_text(orig, 8)}",
             'hostname': lambda orig: f"server-{self._hash_text(orig, 3)}.internal",
             'ip_address': lambda orig: f"192.168.1.{int(self._hash_text(orig, 1), 16) % 254 + 1}",
             'phone': lambda orig: f"+1-555-{self._hash_text(orig, 3)}-{self._hash_text(orig, 4)}",
@@ -186,7 +190,7 @@ class TextProcessor:
     def _hash_text(self, text: str, length: int) -> str:
         """Generate deterministic hash for pseudonymization"""
         import hashlib
-        hash_obj = hashlib.md5(text.lower().encode('utf-8'))
+        hash_obj = hashlib.sha256(text.lower().encode('utf-8'))
         return hash_obj.hexdigest()[:length]
     
     def generate_replacement_text(self, entity_type: str, original_text: str, 
@@ -269,6 +273,30 @@ class TextProcessor:
             transformations.append(transformation)
             
             logger.info(f"Applied {decision.final_action.value.lower()} to '{decision.original_text}' -> '{decision.replacement_text}'")
+
+        # A name may be recognized in one sentence but missed in another.
+        # Reuse its established pseudonym for remaining exact mentions.
+        known_names = {
+            decision.original_text: decision.replacement_text
+            for decision in decisions
+            if decision.entity_type == 'person_name'
+            and decision.final_action == RedactionAction.PSEUDONYMIZE
+            and decision.original_text != decision.replacement_text
+        }
+        for original, replacement in sorted(known_names.items(), key=lambda item: -len(item[0])):
+            pattern = re.compile(r'(?<!\w)' + re.escape(original) + r'(?!\w)')
+            processed_text, count = pattern.subn(lambda _: replacement, processed_text)
+            if count:
+                transformations.append({
+                    'entity_type': 'person_name',
+                    'original_text': original,
+                    'replacement_text': replacement,
+                    'action': RedactionAction.PSEUDONYMIZE.value,
+                    'position': None,
+                    'occurrences': count,
+                    'redaction_type': 'remaining_mentions',
+                    'timestamp': datetime.now().isoformat(),
+                })
         
         return processed_text, transformations
 
