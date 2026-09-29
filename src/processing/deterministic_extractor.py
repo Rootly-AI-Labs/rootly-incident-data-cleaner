@@ -117,8 +117,8 @@ class DeterministicExtractor:
         # Enhanced regex patterns for specific use cases
         self.custom_patterns = {
             'internal_url': re.compile(r'https?://internal-[a-zA-Z0-9\-]+\.[a-zA-Z]{2,}(\/.*)?', re.IGNORECASE),
-            'jira_ticket': re.compile(r'[A-Z]{2,}-\d+', re.IGNORECASE),
-            'aws_arn': re.compile(r'arn:aws:[a-zA-Z0-9]:[a-zA-Z0-9\-]+:[0-9]{12}:[a-zA-Z0-9\-_/:]+', re.IGNORECASE),
+            'jira_ticket': re.compile(r'(?<![A-Za-z0-9-])[A-Z]{2,}-\d+\b'),
+            'aws_arn': re.compile(r'\barn:aws(?:-[a-z0-9-]+)?:[a-z0-9-]+:[a-z0-9-]*:\d{12}:[^\s,;]*[a-z0-9_/-]', re.IGNORECASE),
             'kubernetes_pod': re.compile(r'[a-z0-9\-]+-[a-z0-9]{8,10}-[a-z0-9]{5}', re.IGNORECASE),
             'slack_channel': re.compile(r'#[a-zA-Z0-9\-_]+', re.IGNORECASE),
             'docker_image': re.compile(r'[a-zA-Z0-9]+/[a-zA-Z0-9\-_]+:[a-zA-Z0-9\-_.]+', re.IGNORECASE)
@@ -132,6 +132,11 @@ class DeterministicExtractor:
             'phone': re.compile(r'(?<!\w)(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}(?!\w)'),
             'ssn': re.compile(r'(?<!\d)\d{3}-\d{2}-\d{4}(?!\d)'),
             'credit_card': re.compile(r'(?<!\d)(?:\d{4}[- ]?){3}\d{4}(?!\d)'),
+            'hostname': re.compile(
+                r'(?<![\w@])(?:[a-z0-9][a-z0-9-]*\.)+'
+                r'(?:internal|local|corp|svc|cluster|(?:us|eu|ap)-[a-z]+-\d)(?![\w-])',
+                re.IGNORECASE,
+            ),
         }
 
         self.secret_assignment_pattern = re.compile(
@@ -244,7 +249,18 @@ class DeterministicExtractor:
                 continue
             for match in pattern_regex.finditer(text):
                 start_pos, end_pos = match.span()
-                if any(pos in existing_positions for pos in range(start_pos, end_pos)):
+                if any(result.start_pos < end_pos and start_pos < result.end_pos
+                       for result in results):
+                    continue
+                overlapping = [
+                    entity for entity in existing_entities
+                    if entity.start_pos < end_pos and start_pos < entity.end_pos
+                ]
+                if overlapping and (pattern_name != 'hostname' or any(
+                        entity.entity_type != 'person_name' for entity in overlapping)):
+                    continue
+                if pattern_name != 'hostname' and any(
+                        pos in existing_positions for pos in range(start_pos, end_pos)):
                     continue
                 results.append(DeterministicResult(
                     entity_type=pattern_name,

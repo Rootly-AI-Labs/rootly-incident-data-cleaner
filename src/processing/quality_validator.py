@@ -89,6 +89,17 @@ class ResidualPIIDetector:
     def detect_residual_pii(self, processed_text: str, original_decisions: List[ArbitrationDecision]) -> List[ValidationIssue]:
         """Detect residual PII in processed text"""
         issues = []
+        pseudonyms = {
+            decision.replacement_text
+            for decision in original_decisions
+            if decision.final_action == RedactionAction.PSEUDONYMIZE
+        }
+        allowlisted = {
+            decision.original_text
+            for decision in original_decisions
+            if decision.final_action == RedactionAction.RETAIN
+            and decision.arbitration_reasoning.startswith('Allowlist override')
+        }
         
         # Check each pattern
         for pattern_name, pattern_regex in self.residual_patterns.items():
@@ -98,6 +109,9 @@ class ResidualPIIDetector:
                 start_pos = match.start()
                 end_pos = match.end()
                 matched_text = match.group()
+
+                if matched_text in pseudonyms or matched_text in allowlisted:
+                    continue
                 
                 # Skip if it matches exclusion patterns
                 if self._is_excluded_text(matched_text):
@@ -120,7 +134,7 @@ class ResidualPIIDetector:
         # Capitalized two-word phrases also describe incident titles and job
         # roles. Use the named-entity detector for residual person names.
         for occurrence in self.pii_detector.detect_pii(processed_text, entities=['PERSON']):
-            if self._is_excluded_text(occurrence.text):
+            if occurrence.text in allowlisted or self._is_excluded_text(occurrence.text):
                 continue
             issues.append(ValidationIssue(
                 issue_type='residual_pii',
@@ -326,6 +340,8 @@ class ConsistencyChecker:
         # Group by entity type
         entity_decisions = {}
         for decision in decisions:
+            if decision.arbitration_reasoning.startswith('Allowlist override'):
+                continue
             entity_type = decision.entity_type
             if entity_type not in entity_decisions:
                 entity_decisions[entity_type] = []

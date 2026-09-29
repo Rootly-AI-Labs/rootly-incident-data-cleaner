@@ -117,14 +117,15 @@ class ConflictResolver:
         winning_action_name = max(weighted_votes.items(), key=lambda x: x[1])[0]
         winning_action = RedactionAction(winning_action_name)
 
-        # A rule-based person detection is a positive privacy signal. A
-        # contextual RETAIN vote must not expose that name; exact allowlist
-        # overrides are handled separately by the arbitration processor.
-        if (entity_type == 'person_name'
+        # A deterministic privacy detection must not be overturned by a
+        # weaker contextual RETAIN vote. Explicit allowlist overrides are
+        # handled separately by the arbitration processor.
+        protected_entities = {'person_name', 'ip_address', 'hostname', 'customer_id'}
+        if (entity_type in protected_entities
                 and stage_decisions.get('deterministic') == RedactionAction.PSEUDONYMIZE
                 and winning_action == RedactionAction.RETAIN):
             winning_action = RedactionAction.PSEUDONYMIZE
-            vote_reasons.append("confirmed person name requires pseudonymization")
+            vote_reasons.append(f"confirmed {entity_type} requires pseudonymization")
         
         # Context-dependent adjustments
         if entity_type in self.entity_rules and self.entity_rules[entity_type].get('context_dependent'):
@@ -212,11 +213,12 @@ class TextProcessor:
                 return self.pseudonym_cache[document_id][cache_key], cache_key
             
             # Generate new pseudonym
-            pattern_func = self.pseudonym_patterns.get(entity_type)
+            pattern_key = entity_type[7:] if entity_type.startswith('custom_') else entity_type
+            pattern_func = self.pseudonym_patterns.get(pattern_key)
             if pattern_func:
                 pseudonym = pattern_func(original_text)
             else:
-                pseudonym = f"[PSEUDONYM_{entity_type.upper()}]"
+                pseudonym = f"[PSEUDONYM_{entity_type.upper()}_{self._hash_text(original_text, 8)}]"
             
             self.pseudonym_cache[document_id][cache_key] = pseudonym
             return pseudonym, cache_key
@@ -446,10 +448,18 @@ class ArbitrationProcessor:
             'customer_id': RedactionAction.PSEUDONYMIZE
         }
         
-        # Extract base entity type
-        base_type = detection.entity_type.split('_')[-1] if '_' in detection.entity_type else detection.entity_type
-        
-        return entity_type_actions.get(base_type, RedactionAction.RETAIN)
+        custom_actions = {
+            'custom_internal_url': RedactionAction.REDACT,
+            'custom_jira_ticket': RedactionAction.PSEUDONYMIZE,
+            'custom_aws_arn': RedactionAction.REDACT,
+            'custom_kubernetes_pod': RedactionAction.PSEUDONYMIZE,
+            'custom_slack_channel': RedactionAction.RETAIN,
+            'custom_docker_image': RedactionAction.PSEUDONYMIZE,
+        }
+        return entity_type_actions.get(
+            detection.entity_type,
+            custom_actions.get(detection.entity_type, RedactionAction.RETAIN),
+        )
     
     def _resolve_all_conflicts(self, entity_map: Dict[str, Dict[str, Any]], 
                              context_text: str) -> List[ArbitrationDecision]:

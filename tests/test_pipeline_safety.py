@@ -11,6 +11,7 @@ from src.policies.policy_manager import PIIPolicy, RedactionAction
 from src.processing.arbitration_engine import ConflictResolver, TextProcessor
 from src.processing.llm_final_reviewer import LLMFinalReviewer
 from src.processing.quality_validator import ResidualPIIDetector
+from src.processing_pipeline import PIIProcessingPipeline
 
 
 class FakeCompletions:
@@ -82,7 +83,11 @@ def test_residual_scan_uses_processed_text_positions():
     detector.pii_detector = SimpleNamespace(detect_pii=lambda *args, **kwargs: [])
 
     issues = detector.detect_residual_pii(
-        'x@example.com', [SimpleNamespace(start_pos=0, end_pos=13)])
+        'x@example.com', [SimpleNamespace(
+            start_pos=0, end_pos=13, final_action=RedactionAction.REDACT,
+            replacement_text='[REDACTED_EMAIL]', original_text='old@example.com',
+            arbitration_reasoning='',
+        )])
 
     assert len(issues) == 1
     assert issues[0].location['text'] == 'x@example.com'
@@ -127,3 +132,22 @@ def test_detected_name_is_pseudonymized_at_every_mention():
     assert result.count('Person_12345678') == 2
     assert 'Maria Garcia' not in result
     assert any(t['redaction_type'] == 'remaining_mentions' for t in transformations)
+
+
+@pytest.mark.asyncio
+async def test_incident_infrastructure_identifiers_preserve_operational_context():
+    text = (
+        'The payments-api service on db-prod-01.internal at 10.2.3.4 failed. '
+        'kafka-broker-3.us-east-1 was healthy. See INC-123 and '
+        'arn:aws:lambda:us-east-1:123456789012:function:payments.'
+    )
+
+    result = await PIIProcessingPipeline(use_real_api=False).process_text(text)
+
+    assert 'db-prod-01.internal' not in result.processed_text
+    assert '10.2.3.4' not in result.processed_text
+    assert 'INC-123' not in result.processed_text
+    assert 'arn:aws:lambda' not in result.processed_text
+    assert 'payments-api' in result.processed_text
+    assert 'kafka-broker-3.us-east-1' in result.processed_text
+    assert result.validation_issues == 0
